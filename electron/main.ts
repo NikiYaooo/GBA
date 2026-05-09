@@ -98,6 +98,22 @@ async function startPythonBackend() {
 
   // 优先复用已有的 data 目录（跨版本持久化，避免每次切换版本丢失知识库数据）
   let dataDir = ''
+
+  // 检查固定位置的启动配置（launcher-config.json）中是否指定了数据目录
+  const appDataDir = path.join(process.env.APPDATA || path.join(require('node:os').homedir(), 'AppData', 'Roaming'), 'GameBuilderAIHelper')
+  const launcherConfigPath = path.join(appDataDir, 'launcher-config.json')
+  try {
+    if (fs.existsSync(launcherConfigPath)) {
+      const lc = JSON.parse(fs.readFileSync(launcherConfigPath, 'utf-8'))
+      if (lc.dataPath && typeof lc.dataPath === 'string' && lc.dataPath.trim()) {
+        const customDir = lc.dataPath.trim()
+        fs.mkdirSync(customDir, { recursive: true })
+        dataDir = customDir
+      }
+    }
+  } catch { /* ignore launcher config errors */ }
+
+  if (!dataDir) {
   const searchDirs = [...candidateBaseDirs]
   // 也检查 portableDir 的父目录下其他 release 文件夹
   if (portableDir) {
@@ -141,6 +157,7 @@ async function startPythonBackend() {
   }
 
   if (!dataDir) dataDir = path.join(candidateBaseDirs[0] || process.cwd(), 'data')
+  }
 
   const logDir = path.join(dataDir, 'logs')
   const pythonLogFile = path.join(logDir, 'python.log')
@@ -219,6 +236,11 @@ async function startPythonBackend() {
 }
 
 function createWindow() {
+  let appVersion = ''
+  try {
+    const pkg = require(path.join(__dirname, '../package.json'))
+    appVersion = pkg.version || ''
+  } catch { /* ignore */ }
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -228,7 +250,7 @@ function createWindow() {
       nodeIntegration: true,
       contextIsolation: false,
     },
-    title: '游戏策划AI助手',
+    title: appVersion ? `游戏策划AI文档助手--${appVersion}` : '游戏策划AI文档助手',
     frame: true,
   })
 

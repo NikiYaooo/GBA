@@ -47,13 +47,28 @@ def _scan_folder(path: str) -> list:
     return files
 
 
-def _run_folder_import(task_id: str, folder_path: str, kb) -> None:
+def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = None) -> None:
     """在后台线程中执行文件夹导入。"""
     import numpy as np
     try:
         _import_tasks[task_id]["status"] = "scanning"
         _import_tasks[task_id]["message"] = "扫描文件夹中..."
-        files = _scan_folder(folder_path)
+
+        if file_paths:
+            # 使用前端指定的文件列表
+            files = []
+            for fp in file_paths:
+                if not os.path.isfile(fp):
+                    continue
+                ext = os.path.splitext(fp)[1].lower()
+                files.append({
+                    "name": os.path.basename(fp),
+                    "path": fp,
+                    "size": os.path.getsize(fp),
+                    "ext": ext.lstrip('.'),
+                })
+        else:
+            files = _scan_folder(folder_path)
         if not files:
             _import_tasks[task_id]["status"] = "error"
             _import_tasks[task_id]["message"] = "文件夹中没有找到支持的文档"
@@ -71,8 +86,8 @@ def _run_folder_import(task_id: str, folder_path: str, kb) -> None:
 
             _import_tasks[task_id]["status"] = "importing"
             _import_tasks[task_id]["current_file"] = f["name"]
-            _import_tasks[task_id]["processed_files"] = idx
-            _import_tasks[task_id]["progress"] = int(idx / total * 100)
+            _import_tasks[task_id]["processed_files"] = idx + 1
+            _import_tasks[task_id]["progress"] = int((idx + 1) / total * 100)
 
             try:
                 content = DocumentParser.parse(f["path"])
@@ -173,8 +188,9 @@ async def kb_import_folder(payload: dict = Body(...)):
         "processed_files": 0,
         "current_file": "",
     }
+    file_paths = payload.get("files")
     loop = asyncio.get_event_loop()
-    loop.run_in_executor(_thread_pool, _run_folder_import, task_id, folder_path, get_kb())
+    loop.run_in_executor(_thread_pool, _run_folder_import, task_id, folder_path, get_kb(), file_paths)
     return {"success": True, "data": {"task_id": task_id}}
 
 

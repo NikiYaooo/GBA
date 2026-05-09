@@ -29,7 +29,8 @@ async def get_professions():
         result.append({
             "id": p["id"], "name": p["name"],
             "role_count": len(p.get("roles", [])),
-            "prompts": p.get("prompts", [])
+            "prompts": p.get("prompts", []),
+            "qualityCheckPrompt": p.get("qualityCheckPrompt", "")
         })
     return {"success": True, "data": result}
 
@@ -89,6 +90,8 @@ async def update_profession_prompt(profession_id: str, payload: dict = Body(...)
         if p["id"] == profession_id:
             if "prompts" in payload:
                 p["prompts"] = payload["prompts"]
+            if "qualityCheckPrompt" in payload:
+                p["qualityCheckPrompt"] = payload["qualityCheckPrompt"]
             save_json(_prompts_db(), prompts)
             return {"success": True}
     return {"success": False, "message": "未找到该职业"}

@@ -10,6 +10,23 @@ export function useSettings(models: Ref<{ name: string; type: 'cloud' | 'local' 
   const tortoiseSvnPath = ref('')
   const modelConfigs = ref<Record<string, ModelConfig>>({})
   const testingModel = ref('')
+  const dataPath = ref('')
+
+  const loadDataPath = async () => {
+    try {
+      const r = await axios.get(apiUrl('/api/config/data-path'))
+      if (r.data.success) dataPath.value = r.data.data?.path || ''
+    } catch { /* */ }
+  }
+
+  const saveDataPath = async () => {
+    try {
+      const r = await axios.post(apiUrl('/api/config/data-path'), { path: dataPath.value })
+      if (r.data.success) {
+        ElMessage.success(r.data.message || '保存成功')
+      }
+    } catch { ElMessage.error('保存失败') }
+  }
 
   const loadConfig = async () => {
     try {
@@ -62,10 +79,12 @@ export function useSettings(models: Ref<{ name: string; type: 'cloud' | 'local' 
     if (loadProfessionsFull) await loadProfessionsFull()
     showSettings.value = true
     loadConfig()
+    loadDataPath()
   }
 
   return {
-    showSettings, autoStart, tortoiseSvnPath, modelConfigs, testingModel,
-    loadConfig, saveConfig, testModel, handleAutoStartChange, openSettings
+    showSettings, autoStart, tortoiseSvnPath, modelConfigs, testingModel, dataPath,
+    loadConfig, saveConfig, testModel, handleAutoStartChange, openSettings,
+    loadDataPath, saveDataPath,
   }
 }

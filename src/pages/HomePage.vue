@@ -2,7 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import {
   FileText, FolderOpen, Search, Settings,
-  Upload, Copy, CheckCircle2,
+  Upload, Copy, Clipboard, CheckCircle2,
   FileEdit, Sparkles, RefreshCw,
   Database, Trash2, Bold, Italic,
   Underline, AlignLeft, AlignCenter, AlignRight,
@@ -80,6 +80,7 @@ const showImitateDialog = ref(false)
 // --- Context menu ---
 const ctxMenu = ref({ visible: false, x: 0, y: 0, doc: null as DocRecord | null })
 const closeCtxMenu = () => { ctxMenu.value.visible = false }
+const excelCellBlur = (e: KeyboardEvent) => (e.target as HTMLElement)?.blur()
 
 const showCtxMenu = (e: MouseEvent, doc: DocRecord) => {
   ctxMenu.value = { visible: true, x: e.clientX, y: e.clientY, doc }
@@ -269,8 +270,10 @@ const handleDocCommand = async (command: string, doc: DocRecord) => {
   } else if (command === 'qualityCheck') {
     ai.aiResult.value = ''; ai.isProcessing.value = true
     const text = tiptapEditor.value?.getText() || docs.currentDoc.value.content || ''
-    const result = await ai.runQualityCheck(text)
-    if (result) ai.aiResult.value = result
+    const pro = prompts.professionsFull.value.find(p => p.id === prompts.selectedImitationProfession.value)
+    const qcPrompt = pro?.qualityCheckPrompt || ''
+    const result = await ai.runQualityCheck(text, qcPrompt)
+    if (result) ai.aiResult.value = `【质检职业：${pro?.name || '默认'}】\n\n${result}`
     else ElMessage.error('质检失败')
     ai.isProcessing.value = false
   }
@@ -363,6 +366,25 @@ const startQualityCheckWithPrompt = async () => {
   if (result) ai.aiResult.value = `【质检角色：${prompts.selectedRole.value.name}】\n\n${result}`
 
   ai.isProcessing.value = false
+}
+
+const editingQualityCheckPrompt = ref('')
+const selectedProfessionQualityCheckPrompt = computed(() => {
+  const pro = prompts.professionsFull.value.find(p => p.id === prompts.selectedImitationProfession.value)
+  return pro?.qualityCheckPrompt || ''
+})
+// Sync editing state when profession changes or data loads
+watch(selectedProfessionQualityCheckPrompt, (val) => {
+  editingQualityCheckPrompt.value = val
+}, { immediate: true })
+
+const saveQualityCheckPrompt = async (val: string) => {
+  try {
+    await axios.put(apiUrl(`/api/prompts/profession/${prompts.selectedImitationProfession.value}`), {
+      qualityCheckPrompt: val
+    })
+    await prompts.loadProfessionsFull()
+  } catch { /* */ }
 }
 
 const runImitateAndCreate = async (requirements: string, mindmapContent: string) => {
@@ -646,7 +668,8 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
 
         <!-- Excel viewer -->
         <div v-else-if="excel.excelData.value" class="min-h-[400px] flex flex-col">
-          <div class="mb-2 flex items-center justify-between shrink-0">
+          <!-- Sheet tabs -->
+          <div class="mb-1 flex items-center justify-between shrink-0">
             <div class="flex gap-1 overflow-x-auto">
               <button
                 v-for="(sh, idx) in excel.excelData.value.sheets" :key="idx"
@@ -654,34 +677,60 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
                 :class="['px-3 py-1 text-xs rounded-t border-b-2 transition-colors', excel.excelData.value.activeSheet === idx ? 'border-blue-500 bg-primary-light text-app-primary font-medium' : 'border-transparent hover:bg-app text-app-secondary']"
               >{{ sh.name }}</button>
             </div>
-            <div class="flex items-center gap-2">
-              <label class="text-xs text-app-muted flex items-center gap-1 cursor-pointer">
-                <span class="w-3 h-3 rounded border inline-block" :style="{background: excel.excelFillColor.value}"></span>
-                <input type="color" :value="excel.excelFillColor.value" class="w-5 h-5 border-0 p-0 cursor-pointer" @change="(e:any) => excel.excelFillColor.value = e.target.value" />
-              </label>
-              <el-button size="small" plain @click="excel.addRow()"><Plus class="w-3.5 h-3.5" />行</el-button>
-              <el-button size="small" plain @click="excel.addCol()"><Plus class="w-3.5 h-3.5" />列</el-button>
-              <el-button size="small" plain @click="handleDocCommand('saveAs', docs.currentDoc.value)"><Save class="w-3.5 h-3.5 inline mr-1" />另存为</el-button>
-            </div>
           </div>
-          <div class="overflow-auto border border-app rounded-lg flex-1">
+          <!-- Enhanced toolbar -->
+          <div class="mb-1 flex items-center gap-1 flex-wrap shrink-0">
+            <el-button size="small" plain @click="excel.addRow()" title="末尾追加行"><Plus class="w-3 h-3" /><span class="ml-0.5">行</span></el-button>
+            <el-button size="small" plain @click="excel.addCol()" title="末尾追加列"><Plus class="w-3 h-3" /><span class="ml-0.5">列</span></el-button>
+            <div class="w-px h-4 bg-app-hover mx-0.5" />
+            <el-button size="small" plain @click="excel.insertRowAbove()" title="上方插入行" :disabled="!excel.selectedCell.value"><span class="text-xs">↑行</span></el-button>
+            <el-button size="small" plain @click="excel.insertRowBelow()" title="下方插入行" :disabled="!excel.selectedCell.value"><span class="text-xs">↓行</span></el-button>
+            <el-button size="small" plain @click="excel.insertColLeft()" title="左侧插入列" :disabled="!excel.selectedCell.value"><span class="text-xs">←列</span></el-button>
+            <el-button size="small" plain @click="excel.insertColRight()" title="右侧插入列" :disabled="!excel.selectedCell.value"><span class="text-xs">→列</span></el-button>
+            <div class="w-px h-4 bg-app-hover mx-0.5" />
+            <el-button size="small" plain @click="excel.deleteRow()" title="删除行" :disabled="!excel.selectedCell.value"><Trash2 class="w-3 h-3 text-red-500" /><span class="ml-0.5">行</span></el-button>
+            <el-button size="small" plain @click="excel.deleteCol()" title="删除列" :disabled="!excel.selectedCell.value"><Trash2 class="w-3 h-3 text-red-500" /><span class="ml-0.5">列</span></el-button>
+            <div class="w-px h-4 bg-app-hover mx-0.5" />
+            <el-button size="small" plain @click="excel.copyCell()" title="复制单元格" :disabled="!excel.selectedCell.value"><Copy class="w-3 h-3" /></el-button>
+            <el-button size="small" plain @click="excel.pasteCell()" title="粘贴单元格" :disabled="!excel.selectedCell.value || !excel.copiedCell.value"><Clipboard class="w-3 h-3" /></el-button>
+            <div class="flex-1" />
+            <label class="text-xs text-app-muted flex items-center gap-1 cursor-pointer" title="填充颜色">
+              <span class="w-3 h-3 rounded border inline-block" :style="{background: excel.excelFillColor.value}"></span>
+              <input type="color" :value="excel.excelFillColor.value" class="w-5 h-5 border-0 p-0 cursor-pointer" @change="(e:any) => excel.excelFillColor.value = e.target.value" />
+            </label>
+            <el-button size="small" plain @click="handleDocCommand('saveAs', docs.currentDoc.value)"><Save class="w-3.5 h-3.5" /><span class="ml-1">另存为</span></el-button>
+          </div>
+          <!-- Table -->
+          <div class="overflow-auto border border-app rounded-lg flex-1" @click.self="excel.closeContextMenu()">
             <table class="w-full text-xs border-collapse">
               <thead>
                 <tr>
                   <th class="border border-app bg-app p-1 sticky left-0 z-10 min-w-[30px] text-app-muted font-normal"></th>
-                  <th v-for="ci in (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.max_col || 1)" :key="ci" class="border border-app bg-app p-1 min-w-[70px] text-app-secondary font-medium text-center">{{ String.fromCharCode(64 + ci) }}</th>
+                  <th v-for="ci in (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.max_col || 1)" :key="ci" class="border border-app bg-app p-1 min-w-[70px] text-app-secondary font-medium text-center select-none" @click="excel.selectCell(-1, ci - 1)">{{ String.fromCharCode(64 + ci) }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(row, ri) in (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.rows || [])" :key="ri">
-                  <td class="border border-app bg-app p-1 text-center text-app-muted text-xs sticky left-0 z-10">{{ ri + 1 }}</td>
-                  <td v-for="(cell, ci) in row" :key="ci" class="border border-app p-0.5 min-w-[70px] relative group" :style="cell.color ? {background: cell.color} : {}">
-                    <div class="flex items-center gap-0.5 absolute right-0.5 top-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                      <input type="color" :value="cell.color || '#ffffff'" class="w-3 h-3 border-0 p-0 cursor-pointer rounded" @change="(e:any) => { cell.color = e.target.value; excel.updateCell(excel.excelData.value!.activeSheet, ri, ci, cell.v) }" />
-                    </div>
-                    <div :contenteditable="true" class="outline-none p-1 min-h-[22px]" @focus="(e:any) => { e.target.textContent = cell.v }" @blur="(e:any) => excel.updateCell(excel.excelData.value!.activeSheet, ri, ci, e.target.textContent || '')" @keydown.enter.prevent="(e:any) => e.target.blur()">
+                  <td class="border border-app bg-app p-1 text-center text-app-muted text-xs sticky left-0 z-10 select-none" @click="excel.selectCell(ri, 0)">{{ ri + 1 }}</td>
+                  <td v-for="(cell, ci) in row" :key="ci"
+                    :class="['border border-app p-0 relative group cursor-cell transition-shadow', excel.selectedCell.value?.ri === ri && excel.selectedCell.value?.ci === ci ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/30' : '']"
+                    :style="cell.color ? {background: cell.color} : {}"
+                    @click="excel.selectCell(ri, ci)"
+                    @contextmenu.prevent="excel.showContextMenu($event, ri, ci)"
+                  >
+                    <div :contenteditable="true" class="outline-none p-1 min-h-[26px] text-xs"
+                      @focus="(e:any) => { excel.selectCell(ri, ci); e.target.textContent = cell.v }"
+                      @blur="(e:any) => excel.updateCell(excel.excelData.value!.activeSheet, ri, ci, e.target.textContent || '')"
+                      @keydown.tab.prevent="excelCellBlur($event); excel.moveSelection(0, $event.shiftKey ? -1 : 1)"
+                      @keydown.enter.prevent="excelCellBlur($event); excel.moveSelection($event.shiftKey ? -1 : 1, 0)"
+                      @keydown.ctrl.c.prevent="excel.copyCell()"
+                      @keydown.ctrl.v.prevent="excel.pasteCell()">
                       <span v-if="cell.f" class="text-blue-500 font-mono" :title="'公式: '+cell.f">{{ cell.v }}</span>
                       <span v-else>{{ cell.v }}</span>
+                    </div>
+                    <!-- Color picker on hover -->
+                    <div class="absolute right-0.5 top-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                      <input type="color" :value="cell.color || '#ffffff'" class="w-3.5 h-3.5 border-0 p-0 cursor-pointer rounded" @change="(e:any) => { excel.setCellColor(ri, ci, e.target.value) }" @click.stop />
                     </div>
                   </td>
                   <td v-for="ci in Math.max(0, (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.max_col || 1) - (row.length || 0))" :key="'e'+ci" class="border border-app p-0.5 min-w-[70px]"></td>
@@ -689,6 +738,32 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
               </tbody>
             </table>
           </div>
+          <!-- Cell info bar -->
+          <div class="mt-1 flex items-center gap-2 text-xs text-app-muted shrink-0">
+            <span v-if="excel.selectedCell.value">单元格：{{ String.fromCharCode(65 + excel.selectedCell.value.ci) }}{{ excel.selectedCell.value.ri + 1 }}</span>
+            <span v-else>点击单元格开始编辑 — Tab/Enter 切换单元格，Ctrl+C/V 复制粘贴</span>
+            <span v-if="excel.copiedCell.value" class="ml-auto flex items-center gap-1"><Copy class="w-3 h-3" />已复制</span>
+          </div>
+          <!-- Context menu -->
+          <Teleport to="body">
+            <div v-if="excel.contextMenu.value.show"
+              class="fixed z-[9999] bg-surface rounded-lg shadow-xl border border-app py-1 min-w-[170px]"
+              :style="{ left: excel.contextMenu.value.x + 'px', top: excel.contextMenu.value.y + 'px' }"
+              @click.stop
+            >
+              <button class="w-full px-3 py-1.5 text-xs text-left hover:bg-app-hover flex items-center gap-2" @click="excel.copyCell()"><Copy class="w-3.5 h-3.5" />复制</button>
+              <button class="w-full px-3 py-1.5 text-xs text-left hover:bg-app-hover flex items-center gap-2" :disabled="!excel.copiedCell.value" @click="excel.pasteCell()"><Clipboard class="w-3.5 h-3.5" />粘贴</button>
+              <div class="border-t border-app-light my-1" />
+              <button class="w-full px-3 py-1.5 text-xs text-left hover:bg-app-hover flex items-center gap-2" @click="excel.insertRowAbove()">↑ 上方插入行</button>
+              <button class="w-full px-3 py-1.5 text-xs text-left hover:bg-app-hover flex items-center gap-2" @click="excel.insertRowBelow()">↓ 下方插入行</button>
+              <button class="w-full px-3 py-1.5 text-xs text-left hover:bg-app-hover flex items-center gap-2" @click="excel.insertColLeft()">← 左侧插入列</button>
+              <button class="w-full px-3 py-1.5 text-xs text-left hover:bg-app-hover flex items-center gap-2" @click="excel.insertColRight()">→ 右侧插入列</button>
+              <div class="border-t border-app-light my-1" />
+              <button class="w-full px-3 py-1.5 text-xs text-left hover:bg-app-hover flex items-center gap-2" @click="excel.clearCell()">清空单元格</button>
+              <button class="w-full px-3 py-1.5 text-xs text-left text-red-500 hover:bg-red-50 flex items-center gap-2" @click="excel.deleteRow()"><Trash2 class="w-3 h-3" />删除行</button>
+              <button class="w-full px-3 py-1.5 text-xs text-left text-red-500 hover:bg-red-50 flex items-center gap-2" @click="excel.deleteCol()"><Trash2 class="w-3 h-3" />删除列</button>
+            </div>
+          </Teleport>
         </div>
 
         <!-- Tiptap editor -->
@@ -781,12 +856,24 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :selected-imitation-profession="prompts.selectedImitationProfession.value"
       :editing-profession-id="prompts.editingProfessionId.value"
       :is-dark="theme.isDark.value"
+      :new-prompt-name="prompts.newPromptName.value"
+      :new-prompt-content="prompts.newPromptContent.value"
+      :quality-check-prompt="editingQualityCheckPrompt"
+      :data-path="settings.dataPath.value"
       @update:is-dark="theme.toggle"
       @update:auto-start="settings.handleAutoStartChange"
       @update:tortoise-svn-path="(v:string) => settings.tortoiseSvnPath.value = v"
       @save-config="settings.saveConfig"
       @test-model="settings.testModel"
       @on-profession-change="prompts.onProfessionChangeForSettings"
+      @update:new-prompt-name="(v:string) => prompts.newPromptName.value = v"
+      @update:new-prompt-content="(v:string) => prompts.newPromptContent.value = v"
+      @update:quality-check-prompt="(v:string) => editingQualityCheckPrompt = v"
+      @save-quality-check-prompt="() => saveQualityCheckPrompt(editingQualityCheckPrompt)"
+      @update:data-path="(v:string) => settings.dataPath.value = v"
+      @save-data-path="settings.saveDataPath"
+      @add-prompt="() => prompts.addPromptToProfession(prompts.selectedImitationProfession.value)"
+      @delete-prompt="(promptId: string) => prompts.deletePromptFromProfession(prompts.selectedImitationProfession.value, promptId)"
     />
 
     <KBDialog
@@ -812,6 +899,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @toggle-file="kb.toggleFile"
       @select-all-files="kb.selectAllFiles"
       @deselect-all-files="kb.deselectAllFiles"
+      @toggle-by-type="kb.toggleFilesByType"
       @delete-document="handleKBDelete"
       @clear-all="handleKBClear"
       @save-chunk-size="kb.saveChunkSize"

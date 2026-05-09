@@ -34,6 +34,7 @@ export function useKnowledgeBase() {
   // 文件夹导入相关
   const folderPath = ref('')
   const scannedFiles = ref<ScannedFile[]>([])
+  const selectedFiles = ref<Set<string>>(new Set())
   const isScanning = ref(false)
   const importProgress = ref<ImportProgress | null>(null)
   const isImporting = ref(false)
@@ -50,17 +51,25 @@ export function useKnowledgeBase() {
     } catch { /* */ }
   }
 
-  const openKB = () => { showKB.value = true; loadStats(); resetFolderImport() }
+  const openKB = () => {
+    showKB.value = true
+    loadStats()
+    // 如果有活跃的导入任务，不重置状态，继续显示进度
+    if (!isImporting.value) resetFolderImport()
+  }
 
   const scanFolder = async () => {
     const path = folderPath.value.trim()
     if (!path) { ElMessage.warning('请输入文件夹路径'); return }
     isScanning.value = true
     scannedFiles.value = []
+    selectedFiles.value = new Set()
     try {
       const r = await axios.post(apiUrl('/api/kb/scan-folder'), { path })
       if (r.data.success) {
         scannedFiles.value = r.data.data.files || []
+        // 默认全选
+        selectedFiles.value = new Set(scannedFiles.value.map(f => f.path))
         if (scannedFiles.value.length === 0) {
           ElMessage.info('文件夹中没有找到支持的文档')
         }
@@ -74,16 +83,58 @@ export function useKnowledgeBase() {
     }
   }
 
+  const toggleFile = (path: string) => {
+    const next = new Set(selectedFiles.value)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    selectedFiles.value = next
+  }
+
+  const selectAllFiles = () => {
+    selectedFiles.value = new Set(scannedFiles.value.map(f => f.path))
+  }
+
+  const deselectAllFiles = () => {
+    selectedFiles.value = new Set()
+  }
+
+  const selectFilesByType = (ext: string) => {
+    const next = new Set(selectedFiles.value)
+    scannedFiles.value.filter(f => f.ext === ext).forEach(f => next.add(f.path))
+    selectedFiles.value = next
+  }
+
+  const deselectFilesByType = (ext: string) => {
+    const next = new Set(selectedFiles.value)
+    scannedFiles.value.filter(f => f.ext === ext).forEach(f => next.delete(f.path))
+    selectedFiles.value = next
+  }
+
+  const toggleFilesByType = (ext: string) => {
+    const typeFiles = scannedFiles.value.filter(f => f.ext === ext)
+    const allSelected = typeFiles.every(f => selectedFiles.value.has(f.path))
+    const next = new Set(selectedFiles.value)
+    typeFiles.forEach(f => {
+      if (allSelected) next.delete(f.path)
+      else next.add(f.path)
+    })
+    selectedFiles.value = next
+  }
+
   const importFolder = async () => {
     const path = folderPath.value.trim()
     if (!path) { ElMessage.warning('请输入文件夹路径'); return }
     if (scannedFiles.value.length === 0) { ElMessage.warning('请先扫描文件夹'); return }
+    if (selectedFiles.value.size === 0) { ElMessage.warning('请至少选择一个文档'); return }
 
     isImporting.value = true
     importProgress.value = { status: 'pending', progress: 0, message: '启动中...', total_files: 0, processed_files: 0, current_file: '' }
 
     try {
-      const r = await axios.post(apiUrl('/api/kb/import-folder'), { path })
+      const r = await axios.post(apiUrl('/api/kb/import-folder'), {
+        path,
+        files: Array.from(selectedFiles.value)
+      })
       if (!r.data.success || !r.data.data?.task_id) {
         ElMessage.warning(r.data.message || '启动导入失败')
         isImporting.value = false
@@ -109,6 +160,8 @@ export function useKnowledgeBase() {
             stopPolling()
             isImporting.value = false
             ElMessage.success(r.data.data.message || '导入完成')
+            // 等后端彻底写完再刷新统计
+            await new Promise(r => setTimeout(r, 800))
             await loadStats()
           } else if (st === 'error') {
             stopPolling()
@@ -134,6 +187,7 @@ export function useKnowledgeBase() {
     stopPolling()
     folderPath.value = ''
     scannedFiles.value = []
+    selectedFiles.value = new Set()
     importProgress.value = null
     isImporting.value = false
     isScanning.value = false
@@ -190,7 +244,9 @@ export function useKnowledgeBase() {
     showKB, isUploadingKB, kbStats, chunkSizeMin, chunkSizeMax,
     showChunkSizeDialog, loadStats, openKB, uploadFile,
     saveChunkSize, rechunk, deleteDocument, clearAll,
-    folderPath, scannedFiles, isScanning, importProgress, isImporting,
-    scanFolder, importFolder, resetFolderImport, stopPolling,
+    folderPath, scannedFiles, selectedFiles, isScanning, importProgress, isImporting,
+    scanFolder, importFolder, toggleFile, selectAllFiles, deselectAllFiles,
+    selectFilesByType, deselectFilesByType, toggleFilesByType,
+    resetFolderImport, stopPolling,
   }
 }

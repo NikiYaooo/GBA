@@ -69,6 +69,7 @@ export interface Profession {
   role_count?: number
   roles?: Role[]
   prompts: PromptTemplate[]
+  qualityCheckPrompt?: string
 }
 
 export interface Role {

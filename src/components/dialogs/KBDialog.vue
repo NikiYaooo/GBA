@@ -5,7 +5,7 @@ import type { ScannedFile, ImportProgress } from '@/composables/useKnowledgeBase
 
 const visible = defineModel<boolean>('visible', { default: false })
 
-defineProps<{
+const props = defineProps<{
   kbStats: KBStats
   isUploadingKB: boolean
   chunkSizeMin: number
@@ -13,6 +13,7 @@ defineProps<{
   showChunkSizeDialog: boolean
   folderPath: string
   scannedFiles: ScannedFile[]
+  selectedFiles: Set<string>
   isScanning: boolean
   importProgress: ImportProgress | null
   isImporting: boolean
@@ -29,6 +30,12 @@ const emit = defineEmits<{
   'update:showChunkSizeDialog': [val: boolean]
   scanFolder: []
   importFolder: []
+  toggleFile: [path: string]
+  selectAllFiles: []
+  deselectAllFiles: []
+  selectByType: [ext: string]
+  deselectByType: [ext: string]
+  toggleByType: [ext: string]
 }>()
 
 const formatSize = (bytes: number) => {
@@ -58,6 +65,11 @@ const handleUploadClick = () => {
     }
   }
   input.click()
+}
+
+const fileExts = () => {
+  const exts = new Set(props.scannedFiles.map(f => f.ext))
+  return Array.from(exts).sort()
 }
 
 const formatProgress = (p: ImportProgress | null): string => {
@@ -99,16 +111,33 @@ const formatProgress = (p: ImportProgress | null): string => {
       <!-- 扫描到的文件列表 -->
       <div v-if="scannedFiles.length > 0 && !isImporting" class="mb-2">
         <div class="flex items-center justify-between mb-1">
-          <span class="text-xs text-app-muted">共 {{ scannedFiles.length }} 个文档</span>
-          <el-button size="small" type="primary" @click="emit('importFolder')">
-            导入全部
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-app-muted">共 {{ scannedFiles.length }} 个文档</span>
+            <el-button link size="small" @click="emit('selectAllFiles')">全选</el-button>
+            <el-button link size="small" @click="emit('deselectAllFiles')">取消全选</el-button>
+            <span class="text-xs text-app-muted mx-0.5">|</span>
+            <template v-for="ext in fileExts()" :key="ext">
+              <el-button link size="small" @click="emit('toggleByType', ext)">{{ ext }}</el-button>
+            </template>
+          </div>
+          <el-button
+            size="small" type="primary"
+            :disabled="selectedFiles.size === 0"
+            @click="emit('importFolder')"
+          >
+            导入选中 ({{ selectedFiles.size }})
           </el-button>
         </div>
         <div class="max-h-[120px] overflow-y-auto border border-app rounded p-1">
           <div
             v-for="(f, i) in scannedFiles" :key="i"
-            class="flex items-center gap-2 px-2 py-1 text-xs hover:bg-app-hover rounded"
+            class="flex items-center gap-2 px-2 py-1 text-xs hover:bg-app-hover rounded cursor-pointer"
+            @click="emit('toggleFile', f.path)"
           >
+            <el-checkbox
+              :model-value="selectedFiles.has(f.path)" size="small"
+              @click.stop="emit('toggleFile', f.path)"
+            />
             <FileText class="w-3.5 h-3.5 text-app-muted shrink-0" />
             <span class="truncate flex-1">{{ f.name }}</span>
             <span class="text-app-muted shrink-0">{{ f.ext }}</span>

@@ -55,8 +55,13 @@ const emit = defineEmits<{
             <el-input
               :model-value="newSvnPath" size="small" placeholder="SVN 目录路径"
               @update:model-value="(v: string) => emit('update:newSvnPath', v)"
-            />
-            <el-button type="primary" size="small" @click="emit('addSvn')">确认</el-button>
+            >
+              <template #suffix>
+                <el-button link size="small" @click="emit('addSvn')" style="margin-top:-1px">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                </el-button>
+              </template>
+            </el-input>
           </div>
         </el-dialog>
 

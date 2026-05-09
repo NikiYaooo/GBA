@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { ModelConfig, Profession, PromptTemplate } from '@/types'
+import { Trash2, Plus } from 'lucide-vue-next'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
-defineProps<{
+const props = defineProps<{
   autoStart: boolean
   tortoiseSvnPath: string
   models: { name: string; type: 'cloud' | 'local' }[]
@@ -13,6 +14,10 @@ defineProps<{
   selectedImitationProfession: string
   editingProfessionId: string
   isDark: boolean
+  newPromptName: string
+  newPromptContent: string
+  qualityCheckPrompt: string
+  dataPath: string
 }>()
 
 const emit = defineEmits<{
@@ -22,7 +27,20 @@ const emit = defineEmits<{
   testModel: [modelName: string]
   onProfessionChange: [profId: string]
   'update:isDark': [val: boolean]
+  'update:newPromptName': [val: string]
+  'update:newPromptContent': [val: string]
+  'update:qualityCheckPrompt': [val: string]
+  'update:dataPath': [val: string]
+  saveQualityCheckPrompt: []
+  saveDataPath: []
+  addPrompt: []
+  deletePrompt: [promptId: string]
 }>()
+
+const isDefaultPrompt = (prompt: PromptTemplate) => prompt.id === 'default'
+
+const currentProfession = () => props.professionsFull.find(p => p.id === props.selectedImitationProfession)
+const customPrompts = () => (currentProfession()?.prompts || []).filter(p => !isDefaultPrompt(p))
 </script>
 
 <template>
@@ -59,6 +77,18 @@ const emit = defineEmits<{
               <el-button size="small" @click="emit('saveConfig')">保存</el-button>
             </div>
             <p class="text-xs text-app-muted mt-1">配置后 SVN 更新将使用 TortoiseSVN 界面，留空则使用命令行 svn</p>
+          </div>
+          <div>
+            <label class="text-sm font-medium block mb-2">数据保存路径</label>
+            <div class="flex gap-2">
+              <el-input
+                :model-value="dataPath" size="small"
+                placeholder="例如：D:\GameBuilderData"
+                @update:model-value="(v: string) => emit('update:dataPath', v)"
+              />
+              <el-button size="small" @click="emit('saveDataPath')">保存</el-button>
+            </div>
+            <p class="text-xs text-app-muted mt-1">设置后配置、知识库等数据保存在该路径下，重启应用后生效。留空则使用默认路径。</p>
           </div>
         </div>
       </el-tab-pane>
@@ -124,17 +154,62 @@ const emit = defineEmits<{
           </div>
           <template v-if="selectedImitationProfession">
             <h3 class="text-sm font-semibold text-app mb-3">
-              {{ professionsFull.find(p => p.id === selectedImitationProfession)?.name }} - 内置仿写指令
+              {{ currentProfession()?.name }} - 仿写指令
             </h3>
-            <p class="text-xs text-app-muted mb-3">仿写 Prompt 已内置在代码中，不可编辑。选择职业后可查看对应 Prompt。</p>
-            <div class="space-y-3 max-h-[300px] overflow-y-auto">
+            <p class="text-xs text-app-muted mb-3">默认 Prompt 为内置不可编辑。可新增自定义 Prompt，自定义 Prompt 可删除。</p>
+            <div v-if="(customPrompts() || []).length > 0" class="space-y-3 max-h-[200px] overflow-y-auto mb-4">
               <div
-                v-for="prompt in (professionsFull.find(p => p.id === selectedImitationProfession)?.prompts || [])"
+                v-for="prompt in customPrompts()"
                 :key="prompt.id"
                 class="border border-app rounded-lg p-3 bg-surface"
               >
-                <div class="text-sm font-medium mb-2">{{ prompt.name }}</div>
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-sm font-medium">{{ prompt.name }}</span>
+                  <el-button size="small" link type="danger" @click="emit('deletePrompt', prompt.id)">
+                    <Trash2 class="w-3.5 h-3.5" />
+                  </el-button>
+                </div>
                 <div class="text-xs text-app-secondary whitespace-pre-wrap leading-relaxed">{{ prompt.content }}</div>
+              </div>
+            </div>
+            <div v-else class="text-xs text-app-muted mb-4">暂无自定义 Prompt，可在此职业下新增。</div>
+
+            <!-- 新增仿写 Prompt -->
+            <div class="border border-dashed border-app rounded-lg p-3 mb-4">
+              <h4 class="text-sm font-medium text-app mb-2 flex items-center gap-1">
+                <Plus class="w-3.5 h-3.5" /> 新增自定义仿写 Prompt
+              </h4>
+              <div class="space-y-2">
+                <el-input
+                  :model-value="newPromptName" size="small" placeholder="Prompt 名称"
+                  @update:model-value="(v: string) => emit('update:newPromptName', v)"
+                />
+                <el-input
+                  :model-value="newPromptContent" type="textarea" :rows="3" size="small"
+                  placeholder="请输入仿写 Prompt 内容"
+                  @update:model-value="(v: string) => emit('update:newPromptContent', v)"
+                />
+                <div class="flex justify-end">
+                  <el-button size="small" type="primary" @click="emit('addPrompt')" :disabled="!newPromptName.trim() || !newPromptContent.trim()">
+                    添加
+                  </el-button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 文档质检 Prompt -->
+            <div class="border border-app rounded-lg p-3">
+              <h4 class="text-sm font-medium text-app mb-2">文档质检 Prompt</h4>
+              <p class="text-xs text-app-muted mb-2">自定义该职业的文档质检提示词，右键文档 →「文档质检」时将使用此 Prompt</p>
+              <el-input
+                :model-value="qualityCheckPrompt" type="textarea" :rows="5" size="small"
+                placeholder="输入质检 Prompt..."
+                @update:model-value="(v: string) => emit('update:qualityCheckPrompt', v)"
+              />
+              <div class="flex justify-end mt-2">
+                <el-button size="small" type="primary" @click="emit('saveQualityCheckPrompt')">
+                  保存质检 Prompt
+                </el-button>
               </div>
             </div>
           </template>
