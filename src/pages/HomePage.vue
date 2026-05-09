@@ -369,13 +369,8 @@ const runImitateAndCreate = async (requirements: string, mindmapContent: string)
   showImitateDialog.value = false
   ai.isProcessing.value = true
 
-  const profPrompt = prompts.getImitationPrompt()
-  const promptText = mindmapContent
-    ? `${profPrompt}\n根据以下脑图分析和需求，仿写策划案。不说客套废话，直接生成文档内容。\n脑图分析：${mindmapContent}\n需求：${requirements}`
-    : `${profPrompt}\n根据以下需求仿写策划案，参考知识库中同类型文档的格式和风格。不说客套废话，直接生成文档内容。\n需求：${requirements}`
-
   try {
-    let content = await ai.runImitation(promptText, '', true)
+    let content = await ai.runImitation(requirements, mindmapContent, true)
     if (!content) { ElMessage.warning('生成失败'); return }
 
     // Auto quality check + fix
@@ -468,7 +463,10 @@ const handleKBClear = async () => {
 // --- Tools handlers ---
 const handleAddSvn = async () => {
   const folderPath = await tools.selectFolder()
-  if (folderPath) await tools.addSvn(folderPath)
+  if (folderPath) {
+    tools.newSvnPath.value = folderPath
+    await tools.addSvn(folderPath)
+  }
 }
 
 const handleRunSvnUpdate = async (item: { id: string; name: string; path: string }) => {
@@ -746,11 +744,6 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
 
     <ImitateDialog
       v-model:visible="showImitateDialog"
-      :professions="prompts.professionsFull.value"
-      :selected-profession-id="prompts.selectedImitationProfession.value"
-      :selected-prompt="prompts.selectedImitationPrompt.value"
-      @update:selected-profession-id="(v:string) => prompts.onProfessionChangeForSettings(v)"
-      @update:selected-prompt="(v:any) => prompts.selectedImitationPrompt.value = v"
       @submit="runImitateAndCreate"
     />
 
@@ -786,21 +779,14 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :testing-model="settings.testingModel.value"
       :professions-full="prompts.professionsFull.value"
       :selected-imitation-profession="prompts.selectedImitationProfession.value"
-      :new-prompt-name="prompts.newPromptName.value"
-      :new-prompt-content="prompts.newPromptContent.value"
       :editing-profession-id="prompts.editingProfessionId.value"
       :is-dark="theme.isDark.value"
       @update:is-dark="theme.toggle"
       @update:auto-start="settings.handleAutoStartChange"
       @update:tortoise-svn-path="(v:string) => settings.tortoiseSvnPath.value = v"
-      @update:new-prompt-name="(v:string) => prompts.newPromptName.value = v"
-      @update:new-prompt-content="(v:string) => prompts.newPromptContent.value = v"
       @save-config="settings.saveConfig"
       @test-model="settings.testModel"
       @on-profession-change="prompts.onProfessionChangeForSettings"
-      @add-prompt="prompts.addPromptToProfession"
-      @delete-prompt="prompts.deletePromptFromProfession"
-      @save-prompt="prompts.saveProfessionPrompt"
     />
 
     <KBDialog
@@ -812,6 +798,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :show-chunk-size-dialog="kb.showChunkSizeDialog.value"
       :folder-path="kb.folderPath.value"
       :scanned-files="kb.scannedFiles.value"
+      :selected-files="kb.selectedFiles.value"
       :is-scanning="kb.isScanning.value"
       :import-progress="kb.importProgress.value"
       :is-importing="kb.isImporting.value"
@@ -822,6 +809,9 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @upload-file="handleKBUpload"
       @scan-folder="kb.scanFolder"
       @import-folder="kb.importFolder"
+      @toggle-file="kb.toggleFile"
+      @select-all-files="kb.selectAllFiles"
+      @deselect-all-files="kb.deselectAllFiles"
       @delete-document="handleKBDelete"
       @clear-all="handleKBClear"
       @save-chunk-size="kb.saveChunkSize"

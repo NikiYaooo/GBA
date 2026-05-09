@@ -3,18 +3,10 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { apiUrl } from '@/utils/api'
-import type { Profession, PromptTemplate } from '@/types'
 
 const visible = defineModel<boolean>('visible', { default: false })
-const props = defineProps<{
-  professions: Profession[]
-  selectedProfessionId: string
-  selectedPrompt: PromptTemplate | null
-}>()
 
 const emit = defineEmits<{
-  'update:selectedProfessionId': [val: string]
-  'update:selectedPrompt': [val: PromptTemplate | null]
   submit: [requirements: string, mindmapContent: string]
 }>()
 
@@ -54,46 +46,17 @@ const submit = async () => {
   mindmapFileName.value = ''
   visible.value = false
 }
-
-const onProfessionChange = (profId: string) => {
-  emit('update:selectedProfessionId', profId)
-  const pro = props.professions.find(p => p.id === profId)
-  const prompts = pro?.prompts || []
-  emit('update:selectedPrompt', prompts.length > 0 ? prompts[0] : null)
-}
 </script>
 
 <template>
   <el-dialog v-model="visible" title="智能仿写 / 智能PRD" width="550px" top="8vh">
     <div class="space-y-4">
       <div>
-        <label class="text-sm font-medium text-app block mb-2">仿写职业</label>
-        <el-select
-          :model-value="selectedProfessionId"
-          class="w-full"
-          @change="onProfessionChange"
-        >
-          <el-option v-for="p in professions" :key="p.id" :label="p.name" :value="p.id" />
-        </el-select>
-      </div>
-      <div v-if="(professions.find(p=>p.id===selectedProfessionId)?.prompts?.length||0) > 1">
-        <label class="text-sm font-medium text-app block mb-2">仿写 Prompt</label>
-        <el-select
-          :model-value="selectedPrompt?.id"
-          class="w-full"
-          @change="(val:string) => emit('update:selectedPrompt', professions.find(p=>p.id===selectedProfessionId)?.prompts?.find(pp=>pp.id===val)||null)"
-        >
-          <el-option
-            v-for="pp in (professions.find(p=>p.id===selectedProfessionId)?.prompts||[])"
-            :key="pp.id" :label="pp.name" :value="pp.id"
-          />
-        </el-select>
-      </div>
-      <div>
         <label class="text-sm font-medium text-app block mb-2">需求描述</label>
         <el-input
-          v-model="requirements" type="textarea" :rows="5"
-          placeholder="描述需求，例如：设计一个春节签到活动..." @keyup.ctrl.enter="submit"
+          v-model="requirements" type="textarea" :rows="6"
+          placeholder="描述需求，例如：设计一个春节签到活动，持续7天，每日签到可获得不同奖励..."
+          @keyup.ctrl.enter="submit"
         />
       </div>
       <div class="flex items-center gap-2">

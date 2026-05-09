@@ -121,35 +121,47 @@ class AIService:
         return await self._call_api(model, messages)
 
     async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True) -> str:
-        """智能仿写：首次使用 RAG，后续可不使用"""
-        system_prompt = "你是一名资深游戏主策划，请根据用户的新需求撰写游戏策划案。要求结构严谨，逻辑清晰，可以直接落地。"
-        
+        """智能仿写：使用 RAG 知识库增强风格和系统关联"""
+        system_prompt = """你是资深游戏策划师，精通各类游戏（手游/端游）的策划文档撰写规范，擅长结合参考文档的风格、结构、术语，仿写符合要求的策划内容，全程贴合以下规则，不偏离用户需求：
+
+1.仿写核心原则：严格参考【本地 RAG 知识库检索结果】（用户提供的历史策划文档、模板、术语库），保持一致的文档结构（标题层级、条目格式）、专业术语、表述风格，不添加无关内容，不改变用户要求的核心逻辑。
+
+2.内容要求：仿写内容需具备可执行性、逻辑闭环，符合游戏策划行业规范——比如数值规则明确、流程步骤清晰、模块划分合理，避免口语化、模糊化表述（例：不说"大概给100钻石"，说"活动奖励：钻石×100，每日可领取1次"）。
+
+3.逻辑补完适配：若用户提供的仿写需求不完整（缺少流程、数值、条件等），需结合 RAG 检索到的同类策划案例，补充合理内容，保证策划文档的完整性和可落地性，补充部分需标注"【补充】"，不强行添加无关功能。
+
+4.术语规范：严格沿用 RAG 知识库中已有的项目专属术语（如奖励命名、系统名称、角色称谓等），不随意创造术语，若有新增术语，需标注说明。
+
+5.格式要求：仿写内容按"章节标题→子标题→条目式描述"排版，关键信息（数值、规则、条件）加粗，符合游戏策划文档（GDD/活动策划/系统策划）的标准格式，可直接导出为Word文档。"""
+
         rag_context = ""
         if use_rag and self.kb:
-            search_results = self.kb.search(requirements, top_k=3)
+            search_results = self.kb.search(requirements, top_k=5)
             if search_results:
-                rag_context = "【以下是知识库中检索到的同类型历史策划案片段，请参考其格式、术语和结构风格进行仿写】：\n\n"
+                rag_context = "【以下是知识库中检索到的同类型历史策划案片段，请严格参考其格式、术语和结构风格进行仿写】：\n\n"
                 for i, res in enumerate(search_results):
-                    rag_context += f"--- 参考片段 {i+1} (来源: {res['metadata'].get('filename', '未知')}) ---\n"
+                    rag_context += f"--- 参考文档 {i+1}：《{res['metadata'].get('filename', '未知')}》---\n"
                     rag_context += res['content'] + "\n\n"
-                    
+
         user_prompt = ""
         if rag_context:
             user_prompt += rag_context
-            
-        user_prompt += f"【当前参考的文档内容（如有）】：\n{doc_content}\n\n"
-        user_prompt += f"【新需求】：\n{requirements}\n\n请开始撰写："
-        
+
+        user_prompt += f"【用户需求】：\n{requirements}\n\n"
+        if doc_content:
+            user_prompt += f"【当前参考的文档内容】：\n{doc_content}\n\n"
+        user_prompt += "请输出：完整、可执行、风格统一的游戏策划内容。"
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         response = await self._call_api(model, messages)
-        
+
         if rag_context:
             response = "*(已应用 RAG 知识库检索增强)*\n\n" + response
-            
+
         return response
         
     async def complete_logic(self, model: str, doc_content: str) -> str:

@@ -11,8 +11,6 @@ defineProps<{
   testingModel: string
   professionsFull: Profession[]
   selectedImitationProfession: string
-  newPromptName: string
-  newPromptContent: string
   editingProfessionId: string
   isDark: boolean
 }>()
@@ -20,14 +18,9 @@ defineProps<{
 const emit = defineEmits<{
   'update:autoStart': [val: boolean]
   'update:tortoiseSvnPath': [val: string]
-  'update:newPromptName': [val: string]
-  'update:newPromptContent': [val: string]
   saveConfig: []
   testModel: [modelName: string]
   onProfessionChange: [profId: string]
-  addPrompt: [profId: string]
-  deletePrompt: [profId: string, promptId: string]
-  savePrompt: [profId: string]
   'update:isDark': [val: boolean]
 }>()
 </script>
@@ -131,55 +124,19 @@ const emit = defineEmits<{
           </div>
           <template v-if="selectedImitationProfession">
             <h3 class="text-sm font-semibold text-app mb-3">
-              {{ professionsFull.find(p => p.id === selectedImitationProfession)?.name }} - 仿写Prompt列表
+              {{ professionsFull.find(p => p.id === selectedImitationProfession)?.name }} - 内置仿写指令
             </h3>
-            <div class="space-y-3 max-h-[240px] overflow-y-auto mb-4">
+            <p class="text-xs text-app-muted mb-3">仿写 Prompt 已内置在代码中，不可编辑。选择职业后可查看对应 Prompt。</p>
+            <div class="space-y-3 max-h-[300px] overflow-y-auto">
               <div
                 v-for="prompt in (professionsFull.find(p => p.id === selectedImitationProfession)?.prompts || [])"
                 :key="prompt.id"
                 class="border border-app rounded-lg p-3 bg-surface"
               >
-                <div class="flex items-center justify-between mb-2">
-                  <input
-                    class="text-sm font-medium border-0 bg-transparent focus:outline-none focus:ring-0 w-40"
-                    v-model="prompt.name" placeholder="Prompt名称"
-                  />
-                  <el-button
-                    link size="small" type="danger"
-                    @click="emit('deletePrompt', editingProfessionId, prompt.id)"
-                  >
-                    删除
-                  </el-button>
-                </div>
-                <textarea
-                  class="text-xs text-app-secondary w-full border border-app rounded p-2 resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
-                  :rows="3" v-model="prompt.content"
-                />
+                <div class="text-sm font-medium mb-2">{{ prompt.name }}</div>
+                <div class="text-xs text-app-secondary whitespace-pre-wrap leading-relaxed">{{ prompt.content }}</div>
               </div>
             </div>
-            <div class="border border-app rounded-lg p-3 bg-primary-light mb-4">
-              <div class="space-y-2">
-                <div>
-                  <label class="text-xs text-app-secondary block mb-1">Prompt 名称</label>
-                  <el-input
-                    :model-value="newPromptName" size="small" placeholder="例如：详细策划案风格"
-                    @update:model-value="(v: string) => emit('update:newPromptName', v)"
-                  />
-                </div>
-                <div>
-                  <label class="text-xs text-app-secondary block mb-1">Prompt 内容</label>
-                  <el-input
-                    :model-value="newPromptContent" type="textarea" :rows="2" size="small"
-                    placeholder="自定义仿写指令..."
-                    @update:model-value="(v: string) => emit('update:newPromptContent', v)"
-                  />
-                </div>
-                <div class="flex justify-end">
-                  <el-button size="small" type="primary" @click="emit('addPrompt', editingProfessionId)">添加Prompt</el-button>
-                </div>
-              </div>
-            </div>
-            <el-button type="primary" size="small" @click="emit('savePrompt', editingProfessionId)">保存修改</el-button>
           </template>
         </div>
       </el-tab-pane>
