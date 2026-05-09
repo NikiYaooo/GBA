@@ -42,9 +42,10 @@ if not os.path.exists(PROMPTS_DB):
 # 初始化知识库
 kb = KnowledgeBase(data_dir=DATA_DIR)
 
-# 从配置加载 chunk_size
+# 从配置加载 chunk_size_min / chunk_size_max
 _kb_config = load_json(CONFIG_DB, {})
-kb._chunk_tokens = _kb_config.get("chunk_size", 512)
+kb._chunk_size_min = _kb_config.get("chunk_size_min", 100)
+kb._chunk_size_max = _kb_config.get("chunk_size_max", 500)
 
 # 初始化 AI 服务
 ai_service = AIService(kb=kb)

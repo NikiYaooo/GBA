@@ -13,5 +13,60 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* ===== 主题色 ===== */
+  --app-bg: #fafafa;
+  --app-surface: #ffffff;
+  --app-sidebar-bg: #ffffff;
+  --app-editor-bg: #ffffff;
+  --app-card-bg: #ffffff;
+  --app-primary: #1d4ed8;
+  --app-primary-light: #eff6ff;
+  --app-primary-text: #1e40af;
+  --app-text: #18181b;
+  --app-text-secondary: #64748b;
+  --app-text-muted: #a1a1aa;
+  --app-border: #e4e4e7;
+  --app-border-light: #e4e4e7;
+  --app-hover: #f4f4f5;
 }
+
+.dark {
+  --app-bg: #0f172a;
+  --app-surface: #1e293b;
+  --app-sidebar-bg: #1e293b;
+  --app-editor-bg: #1e293b;
+  --app-card-bg: #1e293b;
+  --app-primary: #3b82f6;
+  --app-primary-light: #1e3a5f;
+  --app-primary-text: #93c5fd;
+  --app-text: #e2e8f0;
+  --app-text-secondary: #94a3b8;
+  --app-text-muted: #64748b;
+  --app-border: #334155;
+  --app-border-light: #1e293b;
+  --app-hover: #334155;
+}
+
+/* ===== 背景工具类 ===== */
+.bg-app { background-color: var(--app-bg); }
+.bg-surface { background-color: var(--app-surface); }
+.bg-sidebar { background-color: var(--app-sidebar-bg); }
+.bg-editor { background-color: var(--app-editor-bg); }
+.bg-card { background-color: var(--app-card-bg); }
+.bg-primary-light { background-color: var(--app-primary-light); }
+.bg-hover { background-color: var(--app-hover); }
+
+/* ===== 文字工具类 ===== */
+.text-app { color: var(--app-text); }
+.text-app-secondary { color: var(--app-text-secondary); }
+.text-app-muted { color: var(--app-text-muted); }
+.text-app-primary { color: var(--app-primary); }
+
+/* ===== 边框工具类 ===== */
+.border-app { border-color: var(--app-border); }
+.border-app-light { border-color: var(--app-border-light); }
+
+/* ===== hover ===== */
+.hover\:bg-app-hover:hover { background-color: var(--app-hover); }
 

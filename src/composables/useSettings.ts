@@ -58,7 +58,11 @@ export function useSettings(models: Ref<{ name: string; type: 'cloud' | 'local' 
     }
   }
 
-  const openSettings = () => { showSettings.value = true; loadConfig() }
+  const openSettings = async (loadProfessionsFull?: () => Promise<void>) => {
+    if (loadProfessionsFull) await loadProfessionsFull()
+    showSettings.value = true
+    loadConfig()
+  }
 
   return {
     showSettings, autoStart, tortoiseSvnPath, modelConfigs, testingModel,

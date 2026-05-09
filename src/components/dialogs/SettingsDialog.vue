@@ -14,6 +14,7 @@ defineProps<{
   newPromptName: string
   newPromptContent: string
   editingProfessionId: string
+  isDark: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +28,7 @@ const emit = defineEmits<{
   addPrompt: [profId: string]
   deletePrompt: [profId: string, promptId: string]
   savePrompt: [profId: string]
+  'update:isDark': [val: boolean]
 }>()
 </script>
 
@@ -43,6 +45,16 @@ const emit = defineEmits<{
               @change="(val: boolean) => emit('update:autoStart', val)"
             />
           </div>
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm font-medium">夜间模式</span>
+              <p class="text-xs text-app-muted mt-0.5">切换深色/浅色主题</p>
+            </div>
+            <el-switch
+              :model-value="isDark"
+              @change="(val: boolean) => emit('update:isDark', val)"
+            />
+          </div>
           <div>
             <label class="text-sm font-medium block mb-2">TortoiseSVN 路径</label>
             <div class="flex gap-2">
@@ -53,7 +65,7 @@ const emit = defineEmits<{
               />
               <el-button size="small" @click="emit('saveConfig')">保存</el-button>
             </div>
-            <p class="text-xs text-zinc-400 mt-1">配置后 SVN 更新将使用 TortoiseSVN 界面，留空则使用命令行 svn</p>
+            <p class="text-xs text-app-muted mt-1">配置后 SVN 更新将使用 TortoiseSVN 界面，留空则使用命令行 svn</p>
           </div>
         </div>
       </el-tab-pane>
@@ -61,7 +73,7 @@ const emit = defineEmits<{
       <!-- AI 模型配置 -->
       <el-tab-pane label="AI 模型配置">
         <div class="py-4 space-y-4 max-h-[400px] overflow-y-auto pr-2">
-          <div v-for="model in models" :key="model.name" class="p-4 bg-zinc-50 border border-zinc-100 rounded-lg">
+          <div v-for="model in models" :key="model.name" class="p-4 bg-primary-light border border-app-light rounded-lg">
             <div class="flex items-center justify-between mb-3">
               <span class="font-semibold">{{ model.name }}</span>
               <el-tag size="small" :type="model.type === 'local' ? 'info' : 'primary'">
@@ -70,21 +82,21 @@ const emit = defineEmits<{
             </div>
             <div v-if="modelConfigs[model.name]" class="space-y-3">
               <div v-if="model.type !== 'local'">
-                <label class="text-xs text-zinc-500 block mb-1">模型 ID</label>
+                <label class="text-xs text-app-secondary block mb-1">模型 ID</label>
                 <el-input
                   v-model="modelConfigs[model.name].modelId" size="small"
                   placeholder="例如：deepseek-chat"
                 />
               </div>
               <div v-if="model.type !== 'local'">
-                <label class="text-xs text-zinc-500 block mb-1">API Key</label>
+                <label class="text-xs text-app-secondary block mb-1">API Key</label>
                 <el-input
                   v-model="modelConfigs[model.name].apiKey"
                   type="password" show-password size="small" placeholder="sk-..."
                 />
               </div>
               <div v-if="model.type === 'local'">
-                <label class="text-xs text-zinc-500 block mb-1">本地地址</label>
+                <label class="text-xs text-app-secondary block mb-1">本地地址</label>
                 <el-input
                   v-model="modelConfigs[model.name].modelId" size="small"
                   placeholder="http://localhost:11434"
@@ -109,7 +121,7 @@ const emit = defineEmits<{
       <el-tab-pane label="职业角色">
         <div class="py-4 pr-2">
           <div class="mb-6">
-            <label class="text-sm font-semibold text-zinc-700 block mb-2">选择职业</label>
+            <label class="text-sm font-semibold text-app block mb-2">选择职业</label>
             <el-select
               :model-value="selectedImitationProfession" size="default" class="w-full"
               @change="(val: string) => emit('onProfessionChange', val)"
@@ -118,14 +130,14 @@ const emit = defineEmits<{
             </el-select>
           </div>
           <template v-if="selectedImitationProfession">
-            <h3 class="text-sm font-semibold text-zinc-700 mb-3">
+            <h3 class="text-sm font-semibold text-app mb-3">
               {{ professionsFull.find(p => p.id === selectedImitationProfession)?.name }} - 仿写Prompt列表
             </h3>
             <div class="space-y-3 max-h-[240px] overflow-y-auto mb-4">
               <div
                 v-for="prompt in (professionsFull.find(p => p.id === selectedImitationProfession)?.prompts || [])"
                 :key="prompt.id"
-                class="border border-zinc-200 rounded-lg p-3 bg-white"
+                class="border border-app rounded-lg p-3 bg-surface"
               >
                 <div class="flex items-center justify-between mb-2">
                   <input
@@ -140,22 +152,22 @@ const emit = defineEmits<{
                   </el-button>
                 </div>
                 <textarea
-                  class="text-xs text-zinc-600 w-full border border-zinc-200 rounded p-2 resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  class="text-xs text-app-secondary w-full border border-app rounded p-2 resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
                   :rows="3" v-model="prompt.content"
                 />
               </div>
             </div>
-            <div class="border border-zinc-200 rounded-lg p-3 bg-zinc-50 mb-4">
+            <div class="border border-app rounded-lg p-3 bg-primary-light mb-4">
               <div class="space-y-2">
                 <div>
-                  <label class="text-xs text-zinc-500 block mb-1">Prompt 名称</label>
+                  <label class="text-xs text-app-secondary block mb-1">Prompt 名称</label>
                   <el-input
                     :model-value="newPromptName" size="small" placeholder="例如：详细策划案风格"
                     @update:model-value="(v: string) => emit('update:newPromptName', v)"
                   />
                 </div>
                 <div>
-                  <label class="text-xs text-zinc-500 block mb-1">Prompt 内容</label>
+                  <label class="text-xs text-app-secondary block mb-1">Prompt 内容</label>
                   <el-input
                     :model-value="newPromptContent" type="textarea" :rows="2" size="small"
                     placeholder="自定义仿写指令..."

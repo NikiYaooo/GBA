@@ -68,7 +68,8 @@ async def kb_stats():
     try:
         stats = get_kb().get_stats()
         config = load_json(os.path.join(get_app_data_dir(), "config.json"), {})
-        stats["chunk_size"] = config.get("chunk_size", 512)
+        stats["chunk_size_min"] = config.get("chunk_size_min", 100)
+        stats["chunk_size_max"] = config.get("chunk_size_max", 500)
         return {"success": True, "data": stats}
     except Exception as e:
         return {"success": False, "message": str(e)}
@@ -76,17 +77,30 @@ async def kb_stats():
 
 @router.post("/chunk-size")
 async def set_kb_chunk_size(payload: dict = Body(...)):
-    size = int(payload.get("size", 512))
-    if size < 100:
-        size = 100
-    if size > 500:
-        size = 500
+    cmin = int(payload.get("min", 100))
+    cmax = int(payload.get("max", 500))
+    if cmin < 50: cmin = 50
+    if cmax > 1000: cmax = 1000
+    if cmin >= cmax: cmax = cmin + 50
+
     config_path = os.path.join(get_app_data_dir(), "config.json")
     config = load_json(config_path, {})
-    config["chunk_size"] = size
+    config["chunk_size_min"] = cmin
+    config["chunk_size_max"] = cmax
     save_json(config_path, config)
-    get_kb()._chunk_tokens = size
-    return {"success": True, "data": {"chunk_size": size}}
+
+    get_kb()._chunk_size_min = cmin
+    get_kb()._chunk_size_max = cmax
+    return {"success": True, "data": {"chunk_size_min": cmin, "chunk_size_max": cmax}}
+
+
+@router.post("/rechunk")
+async def kb_rechunk():
+    try:
+        result = get_kb().rechunk_all()
+        return result
+    except Exception as e:
+        return {"success": False, "message": f"重新分块失败: {str(e)}"}
 
 
 @router.delete("/document/{file_hash}")

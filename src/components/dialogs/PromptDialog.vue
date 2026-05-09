@@ -33,7 +33,7 @@ const emit = defineEmits<{
 <template>
   <el-dialog v-model="visible" title="文档质检" width="550px" top="8vh">
     <div class="mb-4">
-      <label class="text-sm font-semibold text-zinc-700 block mb-2">选择职业</label>
+      <label class="text-sm font-semibold text-app block mb-2">选择职业</label>
       <el-select
         :model-value="selectedProfession" class="w-full"
         @change="(val: string) => emit('update:selectedProfession', val)"
@@ -41,14 +41,14 @@ const emit = defineEmits<{
         <el-option v-for="p in professions" :key="p.id" :label="p.name" :value="p.id">
           <div class="flex items-center justify-between">
             <span>{{ p.name }}</span>
-            <span class="text-xs text-zinc-400">{{ p.role_count }} 个角色</span>
+            <span class="text-xs text-app-muted">{{ p.role_count }} 个角色</span>
           </div>
         </el-option>
       </el-select>
     </div>
 
     <div class="mb-3 flex items-center justify-between">
-      <label class="text-sm font-semibold text-zinc-700">质检角色</label>
+      <label class="text-sm font-semibold text-app">质检角色</label>
       <div class="flex gap-1">
         <el-button size="small" type="primary" plain @click="emit('startAddRole')">新增角色</el-button>
         <el-button size="small" type="warning" plain @click="emit('resetDefaults')">重置默认</el-button>
@@ -58,14 +58,14 @@ const emit = defineEmits<{
     <div v-if="showAddRoleForm" class="border border-blue-200 bg-blue-50 rounded-lg p-3 mb-3">
       <div class="space-y-2">
         <div>
-          <label class="text-xs text-zinc-500 block mb-1">角色名称</label>
+          <label class="text-xs text-app-secondary block mb-1">角色名称</label>
           <el-input
             :model-value="newRoleName" size="small"
             @update:model-value="(v: string) => emit('update:newRoleName', v)"
           />
         </div>
         <div>
-          <label class="text-xs text-zinc-500 block mb-1">质检提示词</label>
+          <label class="text-xs text-app-secondary block mb-1">质检提示词</label>
           <el-input
             :model-value="newRolePrompt" type="textarea" :rows="3" size="small"
             @update:model-value="(v: string) => emit('update:newRolePrompt', v)"
@@ -83,7 +83,7 @@ const emit = defineEmits<{
     <div class="space-y-2 max-h-[300px] overflow-y-auto">
       <div v-for="role in roles" :key="role.id">
         <div
-          :class="['border rounded-lg p-3 cursor-pointer', selectedRole?.id === role.id ? 'border-blue-400 bg-blue-50' : 'border-zinc-200 hover:border-zinc-300']"
+          :class="['border rounded-lg p-3 cursor-pointer', selectedRole?.id === role.id ? 'border-blue-400 bg-blue-50' : 'border-app hover:border-zinc-300']"
           @click="emit('selectRole', role)"
         >
           <div class="flex items-center justify-between mb-1">
@@ -93,7 +93,7 @@ const emit = defineEmits<{
               <el-button link size="small" @click.stop="emit('deleteRole', role.id)"><Trash2 class="w-3.5 h-3.5 text-red-400" /></el-button>
             </div>
           </div>
-          <p class="text-xs text-zinc-500 line-clamp-2">{{ role.prompt }}</p>
+          <p class="text-xs text-app-secondary line-clamp-2">{{ role.prompt }}</p>
         </div>
       </div>
     </div>

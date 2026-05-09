@@ -67,7 +67,7 @@ const onProfessionChange = (profId: string) => {
   <el-dialog v-model="visible" title="智能仿写 / 智能PRD" width="550px" top="8vh">
     <div class="space-y-4">
       <div>
-        <label class="text-sm font-medium text-zinc-700 block mb-2">仿写职业</label>
+        <label class="text-sm font-medium text-app block mb-2">仿写职业</label>
         <el-select
           :model-value="selectedProfessionId"
           class="w-full"
@@ -77,7 +77,7 @@ const onProfessionChange = (profId: string) => {
         </el-select>
       </div>
       <div v-if="(professions.find(p=>p.id===selectedProfessionId)?.prompts?.length||0) > 1">
-        <label class="text-sm font-medium text-zinc-700 block mb-2">仿写 Prompt</label>
+        <label class="text-sm font-medium text-app block mb-2">仿写 Prompt</label>
         <el-select
           :model-value="selectedPrompt?.id"
           class="w-full"
@@ -90,14 +90,14 @@ const onProfessionChange = (profId: string) => {
         </el-select>
       </div>
       <div>
-        <label class="text-sm font-medium text-zinc-700 block mb-2">需求描述</label>
+        <label class="text-sm font-medium text-app block mb-2">需求描述</label>
         <el-input
           v-model="requirements" type="textarea" :rows="5"
           placeholder="描述需求，例如：设计一个春节签到活动..." @keyup.ctrl.enter="submit"
         />
       </div>
       <div class="flex items-center gap-2">
-        <span class="text-xs text-zinc-400">辅助脑图（可选）：</span>
+        <span class="text-xs text-app-muted">辅助脑图（可选）：</span>
         <el-button size="small" @click="handleMindmapSelect">选择脑图文件</el-button>
         <span v-if="mindmapFileName" class="text-xs text-green-600">{{ mindmapFileName }}</span>
       </div>

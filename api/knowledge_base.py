@@ -5,6 +5,7 @@ import time
 import hashlib
 import traceback
 import sys
+import random
 from typing import List, Dict, Any, Optional
 
 
@@ -27,6 +28,9 @@ class KnowledgeBase:
         self._embedding_backend: str = "sentence_transformers"
         self._vectors = None  # type: ignore
         self._chunks: List[Dict[str, Any]] = []
+        self._raw_docs: List[Dict[str, Any]] = []
+        self._chunk_size_min = 100
+        self._chunk_size_max = 500
         self._bm25 = None  # type: ignore
 
         self._load_state()
@@ -82,9 +86,17 @@ class KnowledgeBase:
         if os.path.exists(self.chunks_path):
             try:
                 with open(self.chunks_path, "r", encoding="utf-8") as f:
-                    self._chunks = json.load(f) or []
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._chunks = data.get("chunks", [])
+                    self._raw_docs = data.get("raw_docs", [])
+                else:
+                    # 兼容旧格式（纯数组）
+                    self._chunks = data
+                    self._raw_docs = []
             except Exception:
                 self._chunks = []
+                self._raw_docs = []
 
         if os.path.exists(self.vectors_path):
             try:
@@ -95,9 +107,13 @@ class KnowledgeBase:
         self._rebuild_bm25()
 
     def _save_state(self):
-        """将当前知识库状态写入磁盘（向量 + 分块元数据）。"""
+        """将当前知识库状态写入磁盘（向量 + 分块元数据 + 原始文档）。"""
+        data = {
+            "chunks": self._chunks,
+            "raw_docs": getattr(self, '_raw_docs', [])
+        }
         with open(self.chunks_path, "w", encoding="utf-8") as f:
-            json.dump(self._chunks, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
         if self._vectors is None:
             if os.path.exists(self.vectors_path):
@@ -128,10 +144,17 @@ class KnowledgeBase:
         return hasher.hexdigest()
 
     def _chunk_text_tokens(self, text: str, chunk_tokens: int = None, overlap_ratio: float = 0.1) -> List[str]:
-        """按中文分词后的 token 数切块（默认 512 token，可配置，10% 重叠）。"""
+        """按中文分词后的 token 数切块（区间随机值，10% 重叠）。"""
         import jieba
-        if chunk_tokens is None:
-            chunk_tokens = getattr(self, '_chunk_tokens', 512)
+        import random
+        if chunk_tokens is not None:
+            pass  # 使用传入的固定值
+        else:
+            cmin = getattr(self, '_chunk_size_min', 100)
+            cmax = getattr(self, '_chunk_size_max', 500)
+            if cmin >= cmax:
+                cmax = cmin + 50
+            chunk_tokens = random.randint(cmin, cmax)
         tokens = [t for t in jieba.lcut(text) if t.strip()]
         if not tokens:
             return []
@@ -156,6 +179,19 @@ class KnowledgeBase:
 
         if any(c.get("metadata", {}).get("file_hash") == file_hash for c in self._chunks):
             return {"success": False, "message": "文件已存在，跳过导入"}
+
+        # 保存原始文档内容
+        raw_doc = {
+            "file_hash": file_hash,
+            "filename": filename,
+            "content": content,
+            "doc_type": doc_type,
+            "file_size": file_size,
+            "added_at": int(time.time()),
+        }
+        # 去重
+        self._raw_docs = [d for d in getattr(self, '_raw_docs', []) if d.get("file_hash") != file_hash]
+        self._raw_docs.append(raw_doc)
 
         chunks = self._chunk_text_tokens(content)
         if not chunks:
@@ -196,6 +232,59 @@ class KnowledgeBase:
         self._save_state()
 
         return {"success": True, "message": f"成功导入 {len(chunks)} 个文本块", "chunks": len(chunks)}
+
+    def rechunk_all(self) -> Dict[str, Any]:
+        """根据当前 chunk_size_min/max 重新分块所有已有文档。"""
+        import numpy as np
+        raw_docs = getattr(self, '_raw_docs', [])
+        if not raw_docs:
+            return {"success": False, "message": "没有原始文档数据，无法重新分块"}
+
+        new_chunks: List[Dict[str, Any]] = []
+        all_vectors: List[np.ndarray] = []
+
+        for raw in raw_docs:
+            content = raw.get("content", "")
+            if not content:
+                continue
+            chunks = self._chunk_text_tokens(content)
+            if not chunks:
+                continue
+
+            file_hash = raw.get("file_hash", "unknown")
+            filename = raw.get("filename", "unknown")
+            doc_type = raw.get("doc_type", "unknown")
+            file_size = raw.get("file_size", 0)
+
+            try:
+                vectors = self._encode_texts(chunks)
+            except Exception:
+                continue
+
+            for i, chunk in enumerate(chunks):
+                new_chunks.append({
+                    "id": f"{file_hash}_{i}",
+                    "content": chunk,
+                    "metadata": {
+                        "filename": filename,
+                        "type": doc_type,
+                        "file_hash": file_hash,
+                        "file_size": file_size,
+                        "chunk_index": i,
+                        "added_at": int(time.time()),
+                    },
+                })
+            all_vectors.append(vectors)
+
+        if not new_chunks:
+            return {"success": False, "message": "重新分块后没有生成任何文本块"}
+
+        self._chunks = new_chunks
+        self._vectors = np.vstack(all_vectors) if len(all_vectors) > 0 else None
+        self._rebuild_bm25()
+        self._save_state()
+
+        return {"success": True, "message": f"已重新分块，共 {len(new_chunks)} 个文本块"}
 
     def search(self, query: str, top_k: int = 6) -> List[Dict[str, Any]]:
         """混合检索：向量（语义）+ BM25（关键词），用 RRF 融合返回 TopK。"""
@@ -299,6 +388,8 @@ class KnowledgeBase:
             return {"success": False, "message": "未找到该文档"}
 
         self._chunks = [self._chunks[i] for i in keep_idxs]
+        # 同时删除 raw_docs 中对应的文档
+        self._raw_docs = [d for d in getattr(self, '_raw_docs', []) if d.get("file_hash") != file_hash]
         if self._vectors is not None and self._vectors.shape[0] >= len(keep_idxs):
             self._vectors = self._vectors[keep_idxs]
         else:
@@ -311,6 +402,7 @@ class KnowledgeBase:
     def clear_all(self) -> Dict[str, Any]:
         """清空知识库。"""
         self._chunks = []
+        self._raw_docs = []
         self._vectors = None
         self._bm25 = None
         self._save_state()

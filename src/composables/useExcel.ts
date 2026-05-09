@@ -50,11 +50,12 @@ export function useExcel() {
     for (const row of sheet.rows) row.push({ v: '', f: '' })
   }
 
-  const saveToFile = async (doc: DocRecord) => {
-    if (!excelData.value) return null
+  const saveToFile = async (doc: DocRecord): Promise<string> => {
+    if (!excelData.value) throw new Error('Excel 数据未加载')
     const saveRes = await axios.post(apiUrl('/api/excel/save'), { sheets: excelData.value.sheets })
-    if (!saveRes.data.success) return null
-    return saveRes.data.data_uri || ''
+    if (!saveRes.data.success) throw new Error(saveRes.data.message || 'Excel 保存接口返回失败')
+    if (!saveRes.data.data_uri) throw new Error('保存后未获取到文件数据')
+    return saveRes.data.data_uri
   }
 
   const initEmpty = () => {

@@ -48,7 +48,8 @@ export interface KBStats {
   total_chunks: number
   total_size_bytes: number
   vector_count: number
-  chunk_size?: number
+  chunk_size_min?: number
+  chunk_size_max?: number
   documents: KBDocument[]
 }
 

@@ -36,6 +36,7 @@ import { useKnowledgeBase } from '@/composables/useKnowledgeBase'
 import { useExcel } from '@/composables/useExcel'
 import { useTools } from '@/composables/useTools'
 import { useSettings } from '@/composables/useSettings'
+import { useTheme } from '@/composables/useTheme'
 import { usePrompts } from '@/composables/usePrompts'
 
 import NewDraftDialog from '@/components/dialogs/NewDraftDialog.vue'
@@ -62,6 +63,7 @@ const kb = useKnowledgeBase()
 const excel = useExcel()
 const tools = useTools()
 const settings = useSettings(ai.models)
+const theme = useTheme()
 const prompts = usePrompts()
 
 // --- Draft state ---
@@ -224,18 +226,25 @@ const handleDocCommand = async (command: string, doc: DocRecord) => {
     const api = (window as any).electronAPI
     if (!api?.saveFileAs) { ElMessage.warning('仅桌面应用可用'); return }
     if (isExcel) {
-      if (docs.currentDoc.value.id !== doc.id) await selectDoc(doc)
-      if (excel.excelData.value) {
-        const dataUri = await excel.saveToFile(doc)
-        if (dataUri) {
-          const defaultName = (doc.name || '表格').replace(/\.[^/.]+$/, '') + '.xlsx'
-          const result = await api.saveFileAs(dataUri, defaultName)
-          if (result?.success) ElMessage.success('已保存至 ' + (result.filePath || ''))
-          else if (result?.error && result.error !== 'Canceled') ElMessage.error('保存失败: ' + result.error)
+      try {
+        // 确保文档已加载且 Excel 数据就绪
+        if (docs.currentDoc.value.id !== doc.id) await selectDoc(doc)
+        if (!excel.excelData.value) {
+          // selectDoc 可能静默失败，主动尝试加载
+          await excel.loadExcelData(doc)
         }
-        return
+        if (!excel.excelData.value) {
+          ElMessage.warning('无法加载表格数据，请先点击该文档打开后再试')
+          return
+        }
+        const dataUri = await excel.saveToFile(doc)
+        const defaultName = (doc.name || '表格').replace(/\.[^/.]+$/, '') + '.xlsx'
+        const result = await api.saveFileAs(dataUri, defaultName)
+        if (result?.success) ElMessage.success('已保存至 ' + (result.filePath || ''))
+        else if (result?.error && result.error !== 'Canceled') ElMessage.error('保存失败: ' + result.error)
+      } catch (e: any) {
+        ElMessage.error('保存失败: ' + (e?.message || String(e)))
       }
-      ElMessage.warning('请先点击表格文档加载数据')
       return
     }
     const baseName = (doc.name || '文档').replace(/\.[^/.]+$/, '')
@@ -474,6 +483,7 @@ onMounted(async () => {
   if (api?.getAutoStartStatus) settings.autoStart.value = await api.getAutoStartStatus()
   await docs.loadDocuments()
   await settings.loadConfig()
+  await theme.loadFromConfig()
   try {
     const r = await axios.get(apiUrl('/api/tools/config'))
     if (r.data.success) {
@@ -490,26 +500,28 @@ onBeforeUnmount(() => {
 })
 
 const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
+
+const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFull())
 </script>
 
 <template>
-  <div class="flex h-screen bg-zinc-50 overflow-hidden font-sans text-zinc-900">
+  <div class="flex h-screen bg-app overflow-hidden font-sans text-app">
     <!-- Left Sidebar -->
-    <div class="w-64 border-r border-zinc-200 bg-white flex flex-col shrink-0">
-      <div class="p-4 border-b border-zinc-100">
+    <div class="w-64 border-r border-app bg-surface flex flex-col shrink-0">
+      <div class="p-4 border-b border-app-light">
         <div class="flex items-center gap-1 mb-3">
-          <h2 class="font-bold text-lg flex items-center gap-2 flex-1"><FolderOpen class="w-5 h-5 text-blue-600" />文档</h2>
+          <h2 class="font-bold text-lg flex items-center gap-2 flex-1"><FolderOpen class="w-5 h-5 text-app-primary" />文档</h2>
           <el-button type="primary" size="small" plain @click="handleUpload"><template #icon><Upload class="w-4 h-4" /></template>上传</el-button>
-          <el-button link @click="kb.openKB()"><Database class="w-4 h-4 text-zinc-400" /></el-button>
-          <el-button link @click="settings.openSettings()"><Settings class="w-4 h-4 text-zinc-400" /></el-button>
+          <el-button link @click="kb.openKB()"><Database class="w-4 h-4 text-app-muted" /></el-button>
+          <el-button link @click="openSettings"><Settings class="w-4 h-4 text-app-muted" /></el-button>
         </div>
         <el-input v-model="docs.searchQuery.value" placeholder="搜索..." :prefix-icon="Search" size="small" clearable />
       </div>
       <div class="px-2 pt-2 pb-2 flex-1 overflow-y-auto" @click="closeCtxMenu">
-        <div class="flex gap-1 mb-3 border-b border-zinc-100 pb-2">
+        <div class="flex gap-1 mb-3 border-b border-app-light pb-2">
           <button
             v-for="cat in categories" :key="cat.id" @click="switchCategory(cat.id)"
-            :class="['flex-1 text-xs font-medium py-1.5 px-1 rounded transition-colors', activeCategory === cat.id ? 'bg-blue-50 text-blue-700' : 'text-zinc-400 hover:text-zinc-600']"
+            :class="['flex-1 text-xs font-medium py-1.5 px-1 rounded transition-colors', activeCategory === cat.id ? 'bg-primary-light text-app-primary' : 'text-app-muted hover:text-app-secondary']"
           >{{ cat.label }}</button>
         </div>
         <div v-if="activeCategory === 'draft'" class="mb-2">
@@ -520,7 +532,7 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
             v-for="doc in docs.filteredDocList.value" :key="doc.id"
             @click="selectDoc(doc)"
             @contextmenu.prevent.stop="showCtxMenu($event, doc)"
-            :class="['flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors text-sm w-full', docs.currentDoc.value.id === doc.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-zinc-100 text-zinc-600']"
+            :class="['flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors text-sm w-full', docs.currentDoc.value.id === doc.id ? 'bg-primary-light text-app-primary' : 'hover:bg-app-hover text-app-secondary']"
           >
             <span class="w-4 h-4 shrink-0 flex items-center justify-center">
               <template v-if="(doc.category||'doc')==='imitation'"><Sparkles class="w-3.5 h-3.5 text-purple-500" /></template>
@@ -530,7 +542,7 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
             </span>
             <span class="truncate flex-1 text-left">{{ doc.name }}</span>
           </div>
-          <div v-if="docs.filteredDocList.value.length === 0" class="text-center text-zinc-400 py-6 text-sm">
+          <div v-if="docs.filteredDocList.value.length === 0" class="text-center text-app-muted py-6 text-sm">
             {{ docs.searchQuery.value ? '无匹配文档' : (activeCategory === 'draft' ? '暂无草稿，点击上方新建' : '暂无文档') }}
           </div>
         </div>
@@ -538,21 +550,21 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
         <Teleport to="body">
           <div
             v-if="ctxMenu.visible"
-            class="fixed z-[9999] bg-white rounded-lg shadow-xl border border-zinc-200 py-1 min-w-[160px]"
+            class="fixed z-[9999] bg-surface rounded-lg shadow-xl border border-app py-1 min-w-[160px]"
             :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
             @click.stop
           >
-            <button class="w-full px-3 py-2 text-sm text-left hover:bg-zinc-100 flex items-center gap-2" @click="handleDocCommand('saveAs', ctxMenu.doc!)"><Save class="w-3.5 h-3.5" />另存为...</button>
-            <button class="w-full px-3 py-2 text-sm text-left hover:bg-zinc-100 flex items-center gap-2" @click="handleDocCommand('qualityCheck', ctxMenu.doc!)"><CheckCircle2 class="w-3.5 h-3.5 text-green-600" />文档质检</button>
-            <button class="w-full px-3 py-2 text-sm text-left hover:bg-zinc-100 flex items-center gap-2" @click="handleDocCommand('rename', ctxMenu.doc!)"><FileEdit class="w-3.5 h-3.5 text-orange-500" />重命名</button>
-            <div class="border-t border-zinc-100 my-1" />
+            <button class="w-full px-3 py-2 text-sm text-left hover:bg-app-hover flex items-center gap-2" @click="handleDocCommand('saveAs', ctxMenu.doc!)"><Save class="w-3.5 h-3.5" />另存为...</button>
+            <button class="w-full px-3 py-2 text-sm text-left hover:bg-app-hover flex items-center gap-2" @click="handleDocCommand('qualityCheck', ctxMenu.doc!)"><CheckCircle2 class="w-3.5 h-3.5 text-green-600" />文档质检</button>
+            <button class="w-full px-3 py-2 text-sm text-left hover:bg-app-hover flex items-center gap-2" @click="handleDocCommand('rename', ctxMenu.doc!)"><FileEdit class="w-3.5 h-3.5 text-orange-500" />重命名</button>
+            <div class="border-t border-app-light my-1" />
             <button class="w-full px-3 py-2 text-sm text-left text-red-500 hover:bg-red-50 flex items-center gap-2" @click="handleDocCommand('delete', ctxMenu.doc!)"><Trash2 class="w-3.5 h-3.5" />删除文档</button>
           </div>
         </Teleport>
       </div>
       <!-- Backend status -->
-      <div class="mt-auto p-4 border-t border-zinc-100">
-        <div class="flex items-center gap-2 text-xs text-zinc-400">
+      <div class="mt-auto p-4 border-t border-app-light">
+        <div class="flex items-center gap-2 text-xs text-app-muted">
           <div :class="['w-2 h-2 rounded-full shrink-0', backend.connected.value ? 'bg-green-500' : 'bg-yellow-500']"></div>
           <span class="truncate">{{ backend.statusText.value }}</span>
           <el-button link size="small" class="ml-auto shrink-0" title="重启后端" @click="backend.restart(); ElMessage.success('已重启')"><RefreshCw class="w-3 h-3" /></el-button>
@@ -561,10 +573,10 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
     </div>
 
     <!-- Main Editor Area -->
-    <div class="flex-1 flex flex-col min-w-0 bg-white" @dragover.prevent @drop.prevent="handleDrop">
-      <div class="h-12 border-b border-zinc-100 flex items-center justify-between px-6 shrink-0">
+    <div class="flex-1 flex flex-col min-w-0 bg-surface" @dragover.prevent @drop.prevent="handleDrop">
+      <div class="h-12 border-b border-app-light flex items-center justify-between px-6 shrink-0">
         <div class="flex items-center gap-3 min-w-0">
-          <FileEdit class="w-5 h-5 text-zinc-400 shrink-0" />
+          <FileEdit class="w-5 h-5 text-app-muted shrink-0" />
           <h1 class="font-semibold truncate">{{ docs.currentDoc.value.name }}</h1>
           <span v-if="editorDirty" class="text-xs text-orange-400 shrink-0">● 未保存</span>
         </div>
@@ -574,61 +586,61 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
       </div>
 
       <!-- Toolbar -->
-      <div v-if="docs.currentDoc.value.id" class="border-b border-zinc-200 bg-white shrink-0">
+      <div v-if="docs.currentDoc.value.id" class="border-b border-app bg-surface shrink-0">
         <div class="px-4 py-1 flex items-center gap-0.5 flex-wrap border-b border-zinc-50">
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="undo" title="撤销"><Undo class="w-3.5 h-3.5" /></button>
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="redo" title="重做"><Redo class="w-3.5 h-3.5" /></button>
-          <div class="w-px h-5 bg-zinc-200 mx-1" />
-          <select class="text-xs border border-zinc-200 rounded px-1 py-1 bg-white min-w-[80px]" @change="(e: any) => setFontFamily(e.target.value)">
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="undo" title="撤销"><Undo class="w-3.5 h-3.5" /></button>
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="redo" title="重做"><Redo class="w-3.5 h-3.5" /></button>
+          <div class="w-px h-5 bg-app-hover mx-1" />
+          <select class="text-xs border border-app rounded px-1 py-1 bg-surface min-w-[80px]" @change="(e: any) => setFontFamily(e.target.value)">
             <option value="">字体</option>
             <option value="SimSun, serif">宋体</option><option value="SimHei, sans-serif">黑体</option>
             <option value="KaiTi, serif">楷体</option><option value="FangSong, serif">仿宋</option>
             <option value="Microsoft YaHei, sans-serif">微软雅黑</option>
           </select>
-          <select class="text-xs border border-zinc-200 rounded px-1 py-1 bg-white" :value="fontSize" @change="(e: any) => setFontSize(e.target.value)">
+          <select class="text-xs border border-app rounded px-1 py-1 bg-surface" :value="fontSize" @change="(e: any) => setFontSize(e.target.value)">
             <option v-for="s in fontSizes" :key="s" :value="s">{{ s }}</option>
           </select>
-          <div class="w-px h-5 bg-zinc-200 mx-1" />
-          <button class="px-2 py-1 rounded hover:bg-zinc-100" :class="{ 'bg-zinc-200': isBold() }" @click="toggleBold" title="加粗"><Bold class="w-4 h-4" /></button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100" :class="{ 'bg-zinc-200': isItalic() }" @click="toggleItalic" title="斜体"><Italic class="w-4 h-4" /></button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100" :class="{ 'bg-zinc-200': isUnderline() }" @click="toggleUnderline" title="下划线"><Underline class="w-4 h-4" /></button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100" :class="{ 'bg-zinc-200': isStrike() }" @click="toggleStrikethrough" title="删除线"><Strikethrough class="w-4 h-4" /></button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100" :class="{ 'bg-zinc-200': isCode() }" @click="toggleCode" title="代码"><Code class="w-4 h-4" /></button>
-          <div class="w-px h-5 bg-zinc-200 mx-1" />
+          <div class="w-px h-5 bg-app-hover mx-1" />
+          <button class="px-2 py-1 rounded hover:bg-app-hover" :class="{ 'bg-app-hover': isBold() }" @click="toggleBold" title="加粗"><Bold class="w-4 h-4" /></button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover" :class="{ 'bg-app-hover': isItalic() }" @click="toggleItalic" title="斜体"><Italic class="w-4 h-4" /></button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover" :class="{ 'bg-app-hover': isUnderline() }" @click="toggleUnderline" title="下划线"><Underline class="w-4 h-4" /></button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover" :class="{ 'bg-app-hover': isStrike() }" @click="toggleStrikethrough" title="删除线"><Strikethrough class="w-4 h-4" /></button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover" :class="{ 'bg-app-hover': isCode() }" @click="toggleCode" title="代码"><Code class="w-4 h-4" /></button>
+          <div class="w-px h-5 bg-app-hover mx-1" />
           <div class="relative" title="文字颜色">
-            <label class="cursor-pointer px-2 py-1 rounded hover:bg-zinc-100 flex items-center"><LetterText class="w-4 h-4" /><span class="w-3 h-0.5 ml-0.5" :style="{ background: fontColor }"></span></label>
+            <label class="cursor-pointer px-2 py-1 rounded hover:bg-app-hover flex items-center"><LetterText class="w-4 h-4" /><span class="w-3 h-0.5 ml-0.5" :style="{ background: fontColor }"></span></label>
             <input type="color" :value="fontColor" class="absolute inset-0 opacity-0 cursor-pointer w-full" @change="(e: any) => setColor(e.target.value)" />
           </div>
           <div class="relative" title="高亮">
-            <label class="cursor-pointer px-2 py-1 rounded hover:bg-zinc-100 flex items-center"><Highlighter class="w-4 h-4" /></label>
+            <label class="cursor-pointer px-2 py-1 rounded hover:bg-app-hover flex items-center"><Highlighter class="w-4 h-4" /></label>
             <input type="color" :value="highlightColor" class="absolute inset-0 opacity-0 cursor-pointer w-full" @change="(e: any) => setHighlight(e.target.value)" />
           </div>
-          <div class="w-px h-5 bg-zinc-200 mx-1" />
-          <button class="px-2 py-1 rounded hover:bg-zinc-100 text-xs" @click="clearMarks" title="清除格式"><span class="underline italic">Tx</span></button>
+          <div class="w-px h-5 bg-app-hover mx-1" />
+          <button class="px-2 py-1 rounded hover:bg-app-hover text-xs" @click="clearMarks" title="清除格式"><span class="underline italic">Tx</span></button>
         </div>
         <div class="px-4 py-1 flex items-center gap-0.5 flex-wrap">
-          <button class="px-2 py-1 rounded hover:bg-zinc-100 text-sm font-bold" :class="{ 'bg-zinc-200': isH1() }" @click="setHeading(1)">H1</button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100 text-sm font-bold" :class="{ 'bg-zinc-200': isH2() }" @click="setHeading(2)">H2</button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100 text-sm font-bold" :class="{ 'bg-zinc-200': isH3() }" @click="setHeading(3)">H3</button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100 text-sm" :class="{ 'bg-zinc-200': isBlockquote() }" @click="toggleBlockquote" title="引用">"</button>
-          <button class="px-2 py-1 rounded hover:bg-zinc-100 text-sm" :class="{ 'bg-zinc-200': isCodeBlock() }" @click="toggleCodeBlock" title="代码块"><Code class="w-3.5 h-3.5" /></button>
-          <div class="w-px h-5 bg-zinc-200 mx-1" />
-          <button class="p-1.5 rounded hover:bg-zinc-100" :class="{ 'bg-zinc-200': isBullet() }" @click="toggleBullet" title="无序列表"><List class="w-4 h-4" /></button>
-          <button class="p-1.5 rounded hover:bg-zinc-100" :class="{ 'bg-zinc-200': isOrdered() }" @click="toggleOrdered" title="有序列表"><ListOrdered class="w-4 h-4" /></button>
-          <div class="w-px h-5 bg-zinc-200 mx-1" />
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="setAlign('left')" title="左对齐"><AlignLeft class="w-4 h-4" /></button>
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="setAlign('center')" title="居中"><AlignCenter class="w-4 h-4" /></button>
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="setAlign('right')" title="右对齐"><AlignRight class="w-4 h-4" /></button>
-          <div class="w-px h-5 bg-zinc-200 mx-1" />
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="showImagePrompt = true" title="插入图片"><Image class="w-4 h-4" /></button>
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="insertTable" title="插入表格"><TableIcon class="w-4 h-4" /></button>
-          <button class="p-1.5 rounded hover:bg-zinc-100" @click="insertHr" title="分割线"><Minus class="w-4 h-4 rotate-90" /></button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover text-sm font-bold" :class="{ 'bg-app-hover': isH1() }" @click="setHeading(1)">H1</button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover text-sm font-bold" :class="{ 'bg-app-hover': isH2() }" @click="setHeading(2)">H2</button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover text-sm font-bold" :class="{ 'bg-app-hover': isH3() }" @click="setHeading(3)">H3</button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover text-sm" :class="{ 'bg-app-hover': isBlockquote() }" @click="toggleBlockquote" title="引用">"</button>
+          <button class="px-2 py-1 rounded hover:bg-app-hover text-sm" :class="{ 'bg-app-hover': isCodeBlock() }" @click="toggleCodeBlock" title="代码块"><Code class="w-3.5 h-3.5" /></button>
+          <div class="w-px h-5 bg-app-hover mx-1" />
+          <button class="p-1.5 rounded hover:bg-app-hover" :class="{ 'bg-app-hover': isBullet() }" @click="toggleBullet" title="无序列表"><List class="w-4 h-4" /></button>
+          <button class="p-1.5 rounded hover:bg-app-hover" :class="{ 'bg-app-hover': isOrdered() }" @click="toggleOrdered" title="有序列表"><ListOrdered class="w-4 h-4" /></button>
+          <div class="w-px h-5 bg-app-hover mx-1" />
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="setAlign('left')" title="左对齐"><AlignLeft class="w-4 h-4" /></button>
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="setAlign('center')" title="居中"><AlignCenter class="w-4 h-4" /></button>
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="setAlign('right')" title="右对齐"><AlignRight class="w-4 h-4" /></button>
+          <div class="w-px h-5 bg-app-hover mx-1" />
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="showImagePrompt = true" title="插入图片"><Image class="w-4 h-4" /></button>
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="insertTable" title="插入表格"><TableIcon class="w-4 h-4" /></button>
+          <button class="p-1.5 rounded hover:bg-app-hover" @click="insertHr" title="分割线"><Minus class="w-4 h-4 rotate-90" /></button>
         </div>
       </div>
 
       <!-- Editor content area -->
       <div class="flex-1 overflow-y-auto p-10 max-w-4xl mx-auto w-full">
-        <div v-if="!docs.currentDoc.value.id" class="h-full flex flex-col items-center justify-center text-zinc-400 border-2 border-dashed border-zinc-100 rounded-xl">
+        <div v-if="!docs.currentDoc.value.id" class="h-full flex flex-col items-center justify-center text-app-muted border-2 border-dashed border-app rounded-xl">
           <Upload class="w-12 h-12 mb-4 opacity-20" />
           <p>拖拽文件到此处，或点击左上角「上传」按钮</p>
           <p class="text-xs mt-2">支持 docx, md, txt, xlsx</p>
@@ -641,11 +653,11 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
               <button
                 v-for="(sh, idx) in excel.excelData.value.sheets" :key="idx"
                 @click="excel.excelData.value.activeSheet = idx"
-                :class="['px-3 py-1 text-xs rounded-t border-b-2 transition-colors', excel.excelData.value.activeSheet === idx ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium' : 'border-transparent hover:bg-zinc-50 text-zinc-500']"
+                :class="['px-3 py-1 text-xs rounded-t border-b-2 transition-colors', excel.excelData.value.activeSheet === idx ? 'border-blue-500 bg-primary-light text-app-primary font-medium' : 'border-transparent hover:bg-app text-app-secondary']"
               >{{ sh.name }}</button>
             </div>
             <div class="flex items-center gap-2">
-              <label class="text-xs text-zinc-400 flex items-center gap-1 cursor-pointer">
+              <label class="text-xs text-app-muted flex items-center gap-1 cursor-pointer">
                 <span class="w-3 h-3 rounded border inline-block" :style="{background: excel.excelFillColor.value}"></span>
                 <input type="color" :value="excel.excelFillColor.value" class="w-5 h-5 border-0 p-0 cursor-pointer" @change="(e:any) => excel.excelFillColor.value = e.target.value" />
               </label>
@@ -654,18 +666,18 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
               <el-button size="small" plain @click="handleDocCommand('saveAs', docs.currentDoc.value)"><Save class="w-3.5 h-3.5 inline mr-1" />另存为</el-button>
             </div>
           </div>
-          <div class="overflow-auto border border-zinc-200 rounded-lg flex-1">
+          <div class="overflow-auto border border-app rounded-lg flex-1">
             <table class="w-full text-xs border-collapse">
               <thead>
                 <tr>
-                  <th class="border border-zinc-200 bg-zinc-50 p-1 sticky left-0 z-10 min-w-[30px] text-zinc-400 font-normal"></th>
-                  <th v-for="ci in (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.max_col || 1)" :key="ci" class="border border-zinc-200 bg-zinc-50 p-1 min-w-[70px] text-zinc-500 font-medium text-center">{{ String.fromCharCode(64 + ci) }}</th>
+                  <th class="border border-app bg-app p-1 sticky left-0 z-10 min-w-[30px] text-app-muted font-normal"></th>
+                  <th v-for="ci in (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.max_col || 1)" :key="ci" class="border border-app bg-app p-1 min-w-[70px] text-app-secondary font-medium text-center">{{ String.fromCharCode(64 + ci) }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(row, ri) in (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.rows || [])" :key="ri">
-                  <td class="border border-zinc-200 bg-zinc-50 p-1 text-center text-zinc-400 text-xs sticky left-0 z-10">{{ ri + 1 }}</td>
-                  <td v-for="(cell, ci) in row" :key="ci" class="border border-zinc-200 p-0.5 min-w-[70px] relative group" :style="cell.color ? {background: cell.color} : {}">
+                  <td class="border border-app bg-app p-1 text-center text-app-muted text-xs sticky left-0 z-10">{{ ri + 1 }}</td>
+                  <td v-for="(cell, ci) in row" :key="ci" class="border border-app p-0.5 min-w-[70px] relative group" :style="cell.color ? {background: cell.color} : {}">
                     <div class="flex items-center gap-0.5 absolute right-0.5 top-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
                       <input type="color" :value="cell.color || '#ffffff'" class="w-3 h-3 border-0 p-0 cursor-pointer rounded" @change="(e:any) => { cell.color = e.target.value; excel.updateCell(excel.excelData.value!.activeSheet, ri, ci, cell.v) }" />
                     </div>
@@ -674,7 +686,7 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
                       <span v-else>{{ cell.v }}</span>
                     </div>
                   </td>
-                  <td v-for="ci in Math.max(0, (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.max_col || 1) - (row.length || 0))" :key="'e'+ci" class="border border-zinc-200 p-0.5 min-w-[70px]"></td>
+                  <td v-for="ci in Math.max(0, (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.max_col || 1) - (row.length || 0))" :key="'e'+ci" class="border border-app p-0.5 min-w-[70px]"></td>
                 </tr>
               </tbody>
             </table>
@@ -687,9 +699,9 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
     </div>
 
     <!-- Right AI Panel -->
-    <div class="w-80 border-l border-zinc-200 bg-zinc-50 flex flex-col shrink-0">
-      <div class="p-4 border-b border-zinc-200">
-        <label class="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 block">AI 模型选择</label>
+    <div class="w-80 border-l border-app bg-app flex flex-col shrink-0">
+      <div class="p-4 border-b border-app">
+        <label class="text-xs font-bold text-app-muted uppercase tracking-wider mb-2 block">AI 模型选择</label>
         <el-select v-model="ai.activeModel.value" size="default" class="w-full">
           <el-option v-for="item in ai.models.value" :key="item.name" :label="item.name" :value="item.name">
             <div class="flex items-center justify-between"><span>{{ item.name }}</span><el-tag v-if="item.type === 'local'" size="small" type="info">本地</el-tag></div>
@@ -697,28 +709,28 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
         </el-select>
       </div>
       <div class="p-4 space-y-4">
-        <label class="text-xs font-bold text-zinc-400 uppercase tracking-wider block">核心功能</label>
+        <label class="text-xs font-bold text-app-muted uppercase tracking-wider block">核心功能</label>
         <div class="grid grid-cols-2 gap-2">
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="tools.openTools()"><CheckCircle2 class="w-5 h-5 text-green-600" /><span>快捷工具</span></el-button>
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="showImitateDialog = true" :loading="ai.isProcessing.value"><Sparkles class="w-5 h-5 text-purple-600" /><span>智能PRD</span></el-button>
-          <el-button class="!m-0 h-20 flex flex-col gap-2" :loading="ai.isProcessing.value" @click="openQualityCheckDialog"><RefreshCw class="w-5 h-5 text-blue-600" /><span>文档质检</span></el-button>
+          <el-button class="!m-0 h-20 flex flex-col gap-2" :loading="ai.isProcessing.value" @click="openQualityCheckDialog"><RefreshCw class="w-5 h-5 text-app-primary" /><span>文档质检</span></el-button>
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="runLogicCompletion" :loading="ai.isProcessing.value"><Zap class="w-5 h-5 text-orange-600" /><span>逻辑补完</span></el-button>
         </div>
       </div>
       <div class="flex-1 p-4 flex flex-col min-h-0">
         <div class="flex items-center justify-between mb-2">
-          <label class="text-xs font-bold text-zinc-400 uppercase tracking-wider">AI 执行结果</label>
+          <label class="text-xs font-bold text-app-muted uppercase tracking-wider">AI 执行结果</label>
           <div class="flex gap-1">
             <el-button link @click="copyResult"><Copy class="w-3.5 h-3.5" /></el-button>
             <el-button v-if="ai.aiResult.value" link @click="clearResult"><Trash2 class="w-3.5 h-3.5 text-red-400" /></el-button>
           </div>
         </div>
-        <div class="flex-1 bg-white border border-zinc-200 rounded-lg p-3 overflow-y-auto text-sm text-zinc-600 leading-relaxed shadow-sm">
+        <div class="flex-1 bg-surface border border-app rounded-lg p-3 overflow-y-auto text-sm text-app-secondary leading-relaxed shadow-sm">
           <div v-if="!ai.aiResult.value && !ai.isProcessing.value" class="h-full flex items-center justify-center text-zinc-300 italic">等待功能触发...</div>
           <div v-else class="whitespace-pre-wrap">{{ ai.aiResult.value }}</div>
           <div v-if="ai.isProcessing.value" class="flex items-center gap-2 mt-2 text-blue-500"><el-icon class="is-loading"><RefreshCw /></el-icon>AI 正在思考中...</div>
         </div>
-        <div v-if="ai.aiResult.value && !ai.isProcessing.value" class="mt-2 pt-2 border-t border-zinc-200">
+        <div v-if="ai.aiResult.value && !ai.isProcessing.value" class="mt-2 pt-2 border-t border-app">
           <div class="flex gap-2">
             <el-input v-model="ai.iterativePrompt.value" placeholder="输入修改指令，继续优化" size="small" @keyup.enter="runIteration" />
             <el-button type="primary" size="small" @click="runIteration" :disabled="!ai.iterativePrompt.value.trim()">继续修改</el-button>
@@ -777,6 +789,8 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
       :new-prompt-name="prompts.newPromptName.value"
       :new-prompt-content="prompts.newPromptContent.value"
       :editing-profession-id="prompts.editingProfessionId.value"
+      :is-dark="theme.isDark.value"
+      @update:is-dark="theme.toggle"
       @update:auto-start="settings.handleAutoStartChange"
       @update:tortoise-svn-path="(v:string) => settings.tortoiseSvnPath.value = v"
       @update:new-prompt-name="(v:string) => prompts.newPromptName.value = v"
@@ -793,9 +807,11 @@ const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
       v-model:visible="kb.showKB.value"
       :kb-stats="kb.kbStats.value"
       :is-uploading-k-b="kb.isUploadingKB.value"
-      :chunk-size="kb.chunkSize.value"
+      :chunk-size-min="kb.chunkSizeMin.value"
+      :chunk-size-max="kb.chunkSizeMax.value"
       :show-chunk-size-dialog="kb.showChunkSizeDialog.value"
-      @update:chunk-size="(v:number) => kb.chunkSize.value = v"
+      @update:chunk-size-min="(v:number) => kb.chunkSizeMin.value = v"
+      @update:chunk-size-max="(v:number) => kb.chunkSizeMax.value = v"
       @update:show-chunk-size-dialog="(v:boolean) => kb.showChunkSizeDialog.value = v"
       @upload-file="handleKBUpload"
       @delete-document="handleKBDelete"
