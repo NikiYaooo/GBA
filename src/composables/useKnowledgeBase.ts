@@ -166,8 +166,16 @@ export function useKnowledgeBase() {
           isPaused.value = st === 'paused'
           if (st === 'done') {
             stopPolling()
+            // 再等一小段时间让后端完成所有写入，然后做最后一次刷新
+            await new Promise(r => setTimeout(r, 400))
+            try {
+              const finalR = await axios.get(apiUrl(`/api/kb/import-progress/${taskId}`))
+              if (finalR.data.success && finalR.data.data) {
+                importProgress.value = finalR.data.data as ImportProgress
+              }
+            } catch { /* use the data we already have */ }
             isImporting.value = false
-            ElMessage.success(r.data.data.message || '导入完成')
+            ElMessage.success(importProgress.value?.message || '导入完成')
             await new Promise(r => setTimeout(r, 800))
             await loadStats()
           } else if (st === 'error') {

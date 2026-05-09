@@ -138,15 +138,20 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
                 skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
                 continue
 
+        _import_tasks[task_id]["skip_reasons"] = skip_reasons
         _import_tasks[task_id]["status"] = "done"
         _import_tasks[task_id]["processed_files"] = total
         _import_tasks[task_id]["succeeded_files"] = succeeded
         _import_tasks[task_id]["skipped_files"] = skipped
         _import_tasks[task_id]["progress"] = 100
-        _import_tasks[task_id]["skip_reasons"] = skip_reasons
         parts = [f"导入完成，成功 {succeeded} 个"]
         if skipped > 0:
             parts.append(f"，跳过 {skipped} 个")
+        if skip_reasons:
+            top_reason, top_count = max(skip_reasons.items(), key=lambda x: x[1])
+            # 把最主要的跳过原因直接写在消息里
+            short_reason = top_reason[:80]
+            parts.append(f" | 主要原因({top_count}次): {short_reason}")
         _import_tasks[task_id]["message"] = "".join(parts)
     except Exception as e:
         _import_tasks[task_id]["status"] = "error"
