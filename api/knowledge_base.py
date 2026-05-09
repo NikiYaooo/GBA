@@ -155,7 +155,13 @@ class KnowledgeBase:
             if cmin >= cmax:
                 cmax = cmin + 50
             chunk_tokens = random.randint(cmin, cmax)
-        tokens = [t for t in jieba.lcut(text) if t.strip()]
+        # 去掉 HTML 标签再分词，防止 <table>/style= 等被当成 token 产生海量无意义分块
+        import re
+        clean = re.sub(r'<[^>]+>', ' ', text)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        if not clean:
+            return []
+        tokens = [t for t in jieba.lcut(clean) if t.strip()]
         if not tokens:
             return []
 
@@ -172,6 +178,7 @@ class KnowledgeBase:
 
     def add_document(self, file_path: str, filename: str, content: str, doc_type: str = "unknown", version: str = "v1.0", file_size: int = 0) -> Dict[str, Any]:
         """将文档解析内容写入知识库（去重、分块、向量化、入库）。"""
+        import numpy as np
         try:
             file_hash = self.get_file_hash(file_path)
         except Exception as e:

@@ -66,7 +66,7 @@
     "appId": "com.gamebuilder.aihelper",
     "productName": "游戏策划AI文档助手",
     "directories": {
-      "output": "release30"
+      "output": "release31"
     },
     "files": [
       "dist",

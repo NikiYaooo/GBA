@@ -49,7 +49,6 @@ def _scan_folder(path: str) -> list:
 
 def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = None) -> None:
     """在后台线程中执行文件夹导入。"""
-    import numpy as np
     try:
         _import_tasks[task_id]["status"] = "scanning"
         _import_tasks[task_id]["message"] = "扫描文件夹中..."
