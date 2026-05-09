@@ -12,12 +12,14 @@ export interface ScannedFile {
 }
 
 export interface ImportProgress {
-  status: 'pending' | 'scanning' | 'importing' | 'done' | 'error' | 'cancelled'
+  status: 'pending' | 'scanning' | 'importing' | 'paused' | 'done' | 'error' | 'cancelled'
   progress: number
   message: string
   total_files: number
   processed_files: number
   current_file: string
+  succeeded_files?: number
+  skipped_files?: number
 }
 
 export function useKnowledgeBase() {
@@ -154,9 +156,7 @@ export function useKnowledgeBase() {
 
   const startPolling = (taskId: string) => {
     stopPolling()
-    let pollCount = 0
     pollTimer = setInterval(async () => {
-      pollCount++
       try {
         const r = await axios.get(apiUrl(`/api/kb/import-progress/${taskId}`))
         if (r.data.success && r.data.data) {
@@ -167,7 +167,6 @@ export function useKnowledgeBase() {
             stopPolling()
             isImporting.value = false
             ElMessage.success(r.data.data.message || '导入完成')
-            // 等后端彻底写完再刷新统计
             await new Promise(r => setTimeout(r, 800))
             await loadStats()
           } else if (st === 'error') {
@@ -178,8 +177,8 @@ export function useKnowledgeBase() {
             stopPolling()
             isImporting.value = false
           }
-          // 导入中每 ~2s 刷新一次统计面板
-          if (pollCount % 4 === 0 && st === 'importing') {
+          // 导入过程中每次轮询都刷新统计面板，确保实时显示
+          if (st === 'importing' || st === 'scanning') {
             loadStats()
           }
         }

@@ -76,12 +76,18 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
 
         total = len(files)
         _import_tasks[task_id]["total_files"] = total
+        _import_tasks[task_id]["succeeded_files"] = 0
+        _import_tasks[task_id]["skipped_files"] = 0
         _import_tasks[task_id]["message"] = f"找到 {total} 个文档，开始导入..."
 
+        succeeded = 0
+        skipped = 0
         for idx, f in enumerate(files):
             if _import_tasks.get(task_id, {}).get("cancelled"):
                 _import_tasks[task_id]["status"] = "cancelled"
                 _import_tasks[task_id]["message"] = "已取消"
+                _import_tasks[task_id]["succeeded_files"] = succeeded
+                _import_tasks[task_id]["skipped_files"] = skipped
                 return
 
             # 暂停检测
@@ -89,6 +95,8 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
                 if _import_tasks.get(task_id, {}).get("cancelled"):
                     _import_tasks[task_id]["status"] = "cancelled"
                     _import_tasks[task_id]["message"] = "已取消"
+                    _import_tasks[task_id]["succeeded_files"] = succeeded
+                    _import_tasks[task_id]["skipped_files"] = skipped
                     return
                 time.sleep(0.5)
 
@@ -96,26 +104,39 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
             _import_tasks[task_id]["current_file"] = f["name"]
             _import_tasks[task_id]["processed_files"] = idx + 1
             _import_tasks[task_id]["progress"] = int((idx + 1) / total * 100)
+            _import_tasks[task_id]["succeeded_files"] = succeeded
+            _import_tasks[task_id]["skipped_files"] = skipped
 
             try:
                 content = DocumentParser.parse(f["path"])
                 if isinstance(content, str) and ("解析错误" in content[:50] or "不支持" in content[:50]):
+                    skipped += 1
                     continue
 
-                kb.add_document(
+                result = kb.add_document(
                     file_path=f["path"],
                     filename=f["name"],
                     content=str(content),
                     doc_type=f["ext"],
                     file_size=f["size"],
                 )
+                if result.get("success"):
+                    succeeded += 1
+                else:
+                    skipped += 1
             except Exception:
+                skipped += 1
                 continue
 
         _import_tasks[task_id]["status"] = "done"
         _import_tasks[task_id]["processed_files"] = total
+        _import_tasks[task_id]["succeeded_files"] = succeeded
+        _import_tasks[task_id]["skipped_files"] = skipped
         _import_tasks[task_id]["progress"] = 100
-        _import_tasks[task_id]["message"] = f"导入完成，共处理 {total} 个文档"
+        parts = [f"导入完成，成功 {succeeded} 个"]
+        if skipped > 0:
+            parts.append(f"，跳过 {skipped} 个")
+        _import_tasks[task_id]["message"] = "".join(parts)
     except Exception as e:
         _import_tasks[task_id]["status"] = "error"
         _import_tasks[task_id]["message"] = f"导入失败: {str(e)}"

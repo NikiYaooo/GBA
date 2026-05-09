@@ -79,8 +79,16 @@ const fileExts = () => {
 const formatProgress = (p: ImportProgress | null): string => {
   if (!p) return ''
   if (p.status === 'scanning') return '扫描文件夹中...'
-  if (p.status === 'importing') return `正在处理: ${p.current_file} (${p.processed_files}/${p.total_files})`
-  if (p.status === 'done') return '导入完成'
+  if (p.status === 'importing') {
+    const base = `正在处理: ${p.current_file} (${p.processed_files}/${p.total_files})`
+    const s = p.succeeded_files ?? 0
+    const k = p.skipped_files ?? 0
+    const extra = []
+    if (s > 0) extra.push(`成功 ${s}`)
+    if (k > 0) extra.push(`跳过 ${k}`)
+    return extra.length > 0 ? `${base} — ${extra.join('，')}` : base
+  }
+  if (p.status === 'done') return p.message
   if (p.status === 'error') return p.message
   return p.message
 }
