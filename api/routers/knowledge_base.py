@@ -82,6 +82,7 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
 
         succeeded = 0
         skipped = 0
+        skip_reasons: dict = {}  # reason → count
         for idx, f in enumerate(files):
             if _import_tasks.get(task_id, {}).get("cancelled"):
                 _import_tasks[task_id]["status"] = "cancelled"
@@ -111,6 +112,8 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
                 content = DocumentParser.parse(f["path"])
                 if isinstance(content, str) and ("解析错误" in content[:50] or "不支持" in content[:50]):
                     skipped += 1
+                    reason = "解析失败: " + content[:80]
+                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
                     continue
 
                 result = kb.add_document(
@@ -124,8 +127,15 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
                     succeeded += 1
                 else:
                     skipped += 1
-            except Exception:
+                    reason = result.get("message", "未知原因")
+                    # 截断过长的失败信息
+                    if len(reason) > 120:
+                        reason = reason[:120] + "..."
+                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+            except Exception as e:
                 skipped += 1
+                reason = f"异常: {str(e)[:100]}"
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
                 continue
 
         _import_tasks[task_id]["status"] = "done"
@@ -133,6 +143,7 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
         _import_tasks[task_id]["succeeded_files"] = succeeded
         _import_tasks[task_id]["skipped_files"] = skipped
         _import_tasks[task_id]["progress"] = 100
+        _import_tasks[task_id]["skip_reasons"] = skip_reasons
         parts = [f"导入完成，成功 {succeeded} 个"]
         if skipped > 0:
             parts.append(f"，跳过 {skipped} 个")

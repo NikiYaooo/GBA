@@ -159,12 +159,12 @@ const formatProgress = (p: ImportProgress | null): string => {
       </div>
 
       <!-- 导入进度 -->
-      <div v-if="isImporting && importProgress" class="space-y-2">
+      <div v-if="importProgress && (isImporting || importProgress.status === 'done' || importProgress.status === 'error')" class="space-y-2">
         <div class="flex items-center gap-2 text-sm">
-          <Loader2 v-if="!isPaused" class="w-4 h-4 animate-spin text-app-primary" />
-          <span v-else class="w-4 h-4 text-orange-500">⏸</span>
+          <Loader2 v-if="isImporting && !isPaused" class="w-4 h-4 animate-spin text-app-primary" />
+          <span v-if="isPaused" class="w-4 h-4 text-orange-500">⏸</span>
           <span class="text-app-secondary">{{ formatProgress(importProgress) }}</span>
-          <div class="ml-auto flex gap-1">
+          <div v-if="isImporting" class="ml-auto flex gap-1">
             <el-button v-if="!isPaused" size="small" plain @click="emit('pauseImport')">暂停</el-button>
             <el-button v-else size="small" type="warning" plain @click="emit('resumeImport')">继续</el-button>
             <el-button size="small" type="danger" plain @click="emit('stopImport')">停止</el-button>
@@ -175,6 +175,13 @@ const formatProgress = (p: ImportProgress | null): string => {
           :status="importProgress.status === 'done' ? 'success' : importProgress.status === 'error' ? 'exception' : undefined"
           :stroke-width="12"
         />
+        <!-- Skip reasons summary -->
+        <div v-if="importProgress.skip_reasons && Object.keys(importProgress.skip_reasons).length > 0" class="text-xs text-app-muted space-y-0.5 mt-1">
+          <div v-for="(count, reason) in importProgress.skip_reasons" :key="reason" class="flex gap-1">
+            <span class="text-orange-500 shrink-0">跳过 {{ count }} 个:</span>
+            <span class="truncate">{{ reason }}</span>
+          </div>
+        </div>
       </div>
     </div>
 

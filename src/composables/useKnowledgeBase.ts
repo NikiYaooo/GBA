@@ -20,6 +20,7 @@ export interface ImportProgress {
   current_file: string
   succeeded_files?: number
   skipped_files?: number
+  skip_reasons?: Record<string, number>
 }
 
 export function useKnowledgeBase() {
