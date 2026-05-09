@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-multipart
+python-docx
+markdown
+langchain
+langchain-community
+chromadb
+openai
+pydantic
+python-dotenv
+requests
+sentence-transformers
+rank_bm25
+jieba
