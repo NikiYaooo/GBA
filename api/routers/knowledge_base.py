@@ -1,11 +1,21 @@
 import os
 import uuid
+import time
+import asyncio
+import concurrent.futures
+from typing import Dict
 from urllib.parse import unquote
 from fastapi import APIRouter, Body, Request
 from document_parser import DocumentParser
 from utils import get_app_data_dir, load_json, save_json
 
 router = APIRouter(prefix="/api/kb", tags=["knowledge_base"])
+
+# 后台导入进度跟踪
+_import_tasks: Dict[str, Dict] = {}
+_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+SUPPORTED_EXTS = {'.docx', '.md', '.txt', '.xlsx', '.xls'}
 
 
 def get_kb():
@@ -16,6 +26,76 @@ def _upload_dir():
     d = os.path.join(get_app_data_dir(), "uploads")
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def _scan_folder(path: str) -> list:
+    """扫描文件夹下所有支持的文档，返回文件信息列表。"""
+    if not os.path.isdir(path):
+        return []
+    files = []
+    for root, dirs, names in os.walk(path):
+        for name in sorted(names):
+            ext = os.path.splitext(name)[1].lower()
+            if ext in SUPPORTED_EXTS:
+                full = os.path.join(root, name)
+                files.append({
+                    "name": name,
+                    "path": full,
+                    "size": os.path.getsize(full),
+                    "ext": ext.lstrip('.'),
+                })
+    return files
+
+
+def _run_folder_import(task_id: str, folder_path: str, kb) -> None:
+    """在后台线程中执行文件夹导入。"""
+    import numpy as np
+    try:
+        _import_tasks[task_id]["status"] = "scanning"
+        _import_tasks[task_id]["message"] = "扫描文件夹中..."
+        files = _scan_folder(folder_path)
+        if not files:
+            _import_tasks[task_id]["status"] = "error"
+            _import_tasks[task_id]["message"] = "文件夹中没有找到支持的文档"
+            return
+
+        total = len(files)
+        _import_tasks[task_id]["total_files"] = total
+        _import_tasks[task_id]["message"] = f"找到 {total} 个文档，开始导入..."
+
+        for idx, f in enumerate(files):
+            if _import_tasks.get(task_id, {}).get("cancelled"):
+                _import_tasks[task_id]["status"] = "cancelled"
+                _import_tasks[task_id]["message"] = "已取消"
+                return
+
+            _import_tasks[task_id]["status"] = "importing"
+            _import_tasks[task_id]["current_file"] = f["name"]
+            _import_tasks[task_id]["processed_files"] = idx
+            _import_tasks[task_id]["progress"] = int(idx / total * 100)
+
+            try:
+                content = DocumentParser.parse(f["path"])
+                if isinstance(content, str) and ("解析错误" in content[:50] or "不支持" in content[:50]):
+                    continue
+
+                kb.add_document(
+                    file_path=f["path"],
+                    filename=f["name"],
+                    content=str(content),
+                    doc_type=f["ext"],
+                    file_size=f["size"],
+                )
+            except Exception:
+                continue
+
+        _import_tasks[task_id]["status"] = "done"
+        _import_tasks[task_id]["processed_files"] = total
+        _import_tasks[task_id]["progress"] = 100
+        _import_tasks[task_id]["message"] = f"导入完成，共处理 {total} 个文档"
+    except Exception as e:
+        _import_tasks[task_id]["status"] = "error"
+        _import_tasks[task_id]["message"] = f"导入失败: {str(e)}"
 
 
 @router.post("/upload")
@@ -61,6 +141,50 @@ async def kb_upload_raw(request: Request):
         return {"success": bool(result.get("success")), "message": result.get("message", "")}
     except Exception as e:
         return {"success": False, "message": f"入库失败: {str(e)}"}
+
+
+@router.post("/scan-folder")
+async def kb_scan_folder(payload: dict = Body(...)):
+    """扫描文件夹，返回支持的文档列表。"""
+    folder_path = payload.get("path", "").strip()
+    if not folder_path:
+        return {"success": False, "message": "请提供文件夹路径"}
+    if not os.path.isdir(folder_path):
+        return {"success": False, "message": "路径不存在或不是文件夹"}
+    files = _scan_folder(folder_path)
+    return {"success": True, "data": {"files": files, "total": len(files)}}
+
+
+@router.post("/import-folder")
+async def kb_import_folder(payload: dict = Body(...)):
+    """异步导入文件夹中所有文档，返回 task_id 用于轮询进度。"""
+    folder_path = payload.get("path", "").strip()
+    if not folder_path:
+        return {"success": False, "message": "请提供文件夹路径"}
+    if not os.path.isdir(folder_path):
+        return {"success": False, "message": "路径不存在或不是文件夹"}
+
+    task_id = str(uuid.uuid4())
+    _import_tasks[task_id] = {
+        "status": "pending",
+        "progress": 0,
+        "message": "等待开始...",
+        "total_files": 0,
+        "processed_files": 0,
+        "current_file": "",
+    }
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(_thread_pool, _run_folder_import, task_id, folder_path, get_kb())
+    return {"success": True, "data": {"task_id": task_id}}
+
+
+@router.get("/import-progress/{task_id}")
+async def kb_import_progress(task_id: str):
+    """查询导入进度。"""
+    task = _import_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": "任务不存在"}
+    return {"success": True, "data": dict(task)}
 
 
 @router.get("/stats")

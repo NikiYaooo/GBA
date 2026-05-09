@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Database } from 'lucide-vue-next'
+import { Database, FolderOpen, FileText, Loader2 } from 'lucide-vue-next'
 import type { KBStats } from '@/types'
+import type { ScannedFile, ImportProgress } from '@/composables/useKnowledgeBase'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -10,16 +11,24 @@ defineProps<{
   chunkSizeMin: number
   chunkSizeMax: number
   showChunkSizeDialog: boolean
+  folderPath: string
+  scannedFiles: ScannedFile[]
+  isScanning: boolean
+  importProgress: ImportProgress | null
+  isImporting: boolean
 }>()
 
 const emit = defineEmits<{
   'update:chunkSizeMin': [val: number]
   'update:chunkSizeMax': [val: number]
+  'update:folderPath': [val: string]
   uploadFile: [file: File]
   deleteDocument: [fileHash: string]
   clearAll: []
   saveChunkSize: []
   'update:showChunkSizeDialog': [val: boolean]
+  scanFolder: []
+  importFolder: []
 }>()
 
 const formatSize = (bytes: number) => {
@@ -50,6 +59,15 @@ const handleUploadClick = () => {
   }
   input.click()
 }
+
+const formatProgress = (p: ImportProgress | null): string => {
+  if (!p) return ''
+  if (p.status === 'scanning') return '扫描文件夹中...'
+  if (p.status === 'importing') return `正在处理: ${p.current_file} (${p.processed_files}/${p.total_files})`
+  if (p.status === 'done') return '导入完成'
+  if (p.status === 'error') return p.message
+  return p.message
+}
 </script>
 
 <template>
@@ -63,6 +81,57 @@ const handleUploadClick = () => {
       </div>
     </div>
 
+    <!-- 文件夹导入区域 -->
+    <div class="border border-app rounded-lg p-4 mb-4">
+      <label class="text-sm font-medium block mb-2">📁 从文件夹导入文档</label>
+      <div class="flex gap-2 mb-2">
+        <el-input
+          :model-value="folderPath" size="small"
+          placeholder="输入文件夹路径，例如：D:\项目文档"
+          :disabled="isImporting"
+          @update:model-value="(v: string) => emit('update:folderPath', v)"
+        />
+        <el-button size="small" :loading="isScanning" :disabled="isImporting" @click="emit('scanFolder')">
+          扫描
+        </el-button>
+      </div>
+
+      <!-- 扫描到的文件列表 -->
+      <div v-if="scannedFiles.length > 0 && !isImporting" class="mb-2">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs text-app-muted">共 {{ scannedFiles.length }} 个文档</span>
+          <el-button size="small" type="primary" @click="emit('importFolder')">
+            导入全部
+          </el-button>
+        </div>
+        <div class="max-h-[120px] overflow-y-auto border border-app rounded p-1">
+          <div
+            v-for="(f, i) in scannedFiles" :key="i"
+            class="flex items-center gap-2 px-2 py-1 text-xs hover:bg-app-hover rounded"
+          >
+            <FileText class="w-3.5 h-3.5 text-app-muted shrink-0" />
+            <span class="truncate flex-1">{{ f.name }}</span>
+            <span class="text-app-muted shrink-0">{{ f.ext }}</span>
+            <span class="text-app-muted shrink-0">{{ formatSize(f.size) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 导入进度 -->
+      <div v-if="isImporting && importProgress" class="space-y-1">
+        <div class="flex items-center gap-2 text-sm">
+          <Loader2 class="w-4 h-4 animate-spin text-app-primary" />
+          <span class="text-app-secondary">{{ formatProgress(importProgress) }}</span>
+        </div>
+        <el-progress
+          :percentage="importProgress.progress"
+          :status="importProgress.status === 'done' ? 'success' : importProgress.status === 'error' ? 'exception' : undefined"
+          :stroke-width="12"
+        />
+      </div>
+    </div>
+
+    <!-- 原有操作栏（上传按钮 + 向量块设置 + 清空） -->
     <div class="flex items-center justify-between mb-3">
       <div class="flex gap-2">
         <el-button size="small" @click="handleUploadClick" :loading="isUploadingKB">上传文档</el-button>
@@ -105,6 +174,7 @@ const handleUploadClick = () => {
       </el-button>
     </div>
 
+    <!-- 拖拽上传区域 -->
     <div
       class="border-2 border-dashed border-app rounded-lg p-6 text-center mb-4 text-xs text-app-muted"
       @dragover.prevent @drop.prevent="handleDrop"
