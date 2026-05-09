@@ -889,6 +889,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :is-scanning="kb.isScanning.value"
       :import-progress="kb.importProgress.value"
       :is-importing="kb.isImporting.value"
+      :is-paused="kb.isPaused.value"
       @update:chunk-size-min="(v:number) => kb.chunkSizeMin.value = v"
       @update:chunk-size-max="(v:number) => kb.chunkSizeMax.value = v"
       @update:show-chunk-size-dialog="(v:boolean) => kb.showChunkSizeDialog.value = v"
@@ -903,6 +904,9 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @delete-document="handleKBDelete"
       @clear-all="handleKBClear"
       @save-chunk-size="kb.saveChunkSize"
+      @pause-import="kb.pauseImport"
+      @resume-import="kb.resumeImport"
+      @stop-import="kb.stopImport"
     />
 
     <ToolsDialog

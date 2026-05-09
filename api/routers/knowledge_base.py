@@ -84,6 +84,14 @@ def _run_folder_import(task_id: str, folder_path: str, kb, file_paths: list = No
                 _import_tasks[task_id]["message"] = "已取消"
                 return
 
+            # 暂停检测
+            while _import_tasks.get(task_id, {}).get("paused"):
+                if _import_tasks.get(task_id, {}).get("cancelled"):
+                    _import_tasks[task_id]["status"] = "cancelled"
+                    _import_tasks[task_id]["message"] = "已取消"
+                    return
+                time.sleep(0.5)
+
             _import_tasks[task_id]["status"] = "importing"
             _import_tasks[task_id]["current_file"] = f["name"]
             _import_tasks[task_id]["processed_files"] = idx + 1
@@ -201,6 +209,42 @@ async def kb_import_progress(task_id: str):
     if not task:
         return {"success": False, "message": "任务不存在"}
     return {"success": True, "data": dict(task)}
+
+
+@router.post("/import-pause/{task_id}")
+async def kb_import_pause(task_id: str):
+    """暂停导入任务。"""
+    task = _import_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": "任务不存在"}
+    task["paused"] = True
+    task["status"] = "paused"
+    task["message"] = "已暂停"
+    return {"success": True}
+
+
+@router.post("/import-resume/{task_id}")
+async def kb_import_resume(task_id: str):
+    """继续导入任务。"""
+    task = _import_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": "任务不存在"}
+    task["paused"] = False
+    task["status"] = "importing"
+    task["message"] = "继续导入中..."
+    return {"success": True}
+
+
+@router.post("/import-stop/{task_id}")
+async def kb_import_stop(task_id: str):
+    """停止（取消）导入任务。"""
+    task = _import_tasks.get(task_id)
+    if not task:
+        return {"success": False, "message": "任务不存在"}
+    task["cancelled"] = True
+    task["status"] = "cancelled"
+    task["message"] = "已停止"
+    return {"success": True}
 
 
 @router.get("/stats")

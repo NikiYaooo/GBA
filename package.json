@@ -1,7 +1,7 @@
 {
   "name": "game_builder",
   "private": true,
-  "version": "2.3.1",
+  "version": "2.3.2",
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -66,7 +66,7 @@
     "appId": "com.gamebuilder.aihelper",
     "productName": "游戏策划AI文档助手",
     "directories": {
-      "output": "release26"
+      "output": "release27"
     },
     "files": [
       "dist",

@@ -17,6 +17,7 @@ const props = defineProps<{
   isScanning: boolean
   importProgress: ImportProgress | null
   isImporting: boolean
+  isPaused: boolean
 }>()
 
 const emit = defineEmits<{
@@ -36,6 +37,9 @@ const emit = defineEmits<{
   selectByType: [ext: string]
   deselectByType: [ext: string]
   toggleByType: [ext: string]
+  pauseImport: []
+  resumeImport: []
+  stopImport: []
 }>()
 
 const formatSize = (bytes: number) => {
@@ -147,10 +151,16 @@ const formatProgress = (p: ImportProgress | null): string => {
       </div>
 
       <!-- 导入进度 -->
-      <div v-if="isImporting && importProgress" class="space-y-1">
+      <div v-if="isImporting && importProgress" class="space-y-2">
         <div class="flex items-center gap-2 text-sm">
-          <Loader2 class="w-4 h-4 animate-spin text-app-primary" />
+          <Loader2 v-if="!isPaused" class="w-4 h-4 animate-spin text-app-primary" />
+          <span v-else class="w-4 h-4 text-orange-500">⏸</span>
           <span class="text-app-secondary">{{ formatProgress(importProgress) }}</span>
+          <div class="ml-auto flex gap-1">
+            <el-button v-if="!isPaused" size="small" plain @click="emit('pauseImport')">暂停</el-button>
+            <el-button v-else size="small" type="warning" plain @click="emit('resumeImport')">继续</el-button>
+            <el-button size="small" type="danger" plain @click="emit('stopImport')">停止</el-button>
+          </div>
         </div>
         <el-progress
           :percentage="importProgress.progress"

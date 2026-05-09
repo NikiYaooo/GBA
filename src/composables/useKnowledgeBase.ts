@@ -38,7 +38,10 @@ export function useKnowledgeBase() {
   const isScanning = ref(false)
   const importProgress = ref<ImportProgress | null>(null)
   const isImporting = ref(false)
+  const isPaused = ref(false)
   let pollTimer: ReturnType<typeof setInterval> | null = null
+  let statsTimer: ReturnType<typeof setInterval> | null = null
+  let currentTaskId = ''
 
   const loadStats = async () => {
     try {
@@ -141,6 +144,7 @@ export function useKnowledgeBase() {
         return
       }
       const taskId = r.data.data.task_id
+      currentTaskId = taskId
       startPolling(taskId)
     } catch (e: any) {
       ElMessage.error('启动导入失败: ' + getErrMsg(e))
@@ -150,12 +154,15 @@ export function useKnowledgeBase() {
 
   const startPolling = (taskId: string) => {
     stopPolling()
+    let pollCount = 0
     pollTimer = setInterval(async () => {
+      pollCount++
       try {
         const r = await axios.get(apiUrl(`/api/kb/import-progress/${taskId}`))
         if (r.data.success && r.data.data) {
           importProgress.value = r.data.data as ImportProgress
           const st = r.data.data.status
+          isPaused.value = st === 'paused'
           if (st === 'done') {
             stopPolling()
             isImporting.value = false
@@ -171,6 +178,10 @@ export function useKnowledgeBase() {
             stopPolling()
             isImporting.value = false
           }
+          // 导入中每 ~2s 刷新一次统计面板
+          if (pollCount % 4 === 0 && st === 'importing') {
+            loadStats()
+          }
         }
       } catch {
         stopPolling()
@@ -181,6 +192,32 @@ export function useKnowledgeBase() {
 
   const stopPolling = () => {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
+  }
+
+  const pauseImport = async () => {
+    if (!currentTaskId) return
+    try {
+      await axios.post(apiUrl(`/api/kb/import-pause/${currentTaskId}`))
+      isPaused.value = true
+      ElMessage.success('已暂停')
+    } catch { ElMessage.error('暂停失败') }
+  }
+
+  const resumeImport = async () => {
+    if (!currentTaskId) return
+    try {
+      await axios.post(apiUrl(`/api/kb/import-resume/${currentTaskId}`))
+      isPaused.value = false
+    } catch { ElMessage.error('继续失败') }
+  }
+
+  const stopImport = async () => {
+    if (!currentTaskId) return
+    try {
+      await axios.post(apiUrl(`/api/kb/import-stop/${currentTaskId}`))
+      // 轮询会检测到 cancelled 状态并清理
+    } catch { ElMessage.error('停止失败') }
   }
 
   const resetFolderImport = () => {
@@ -191,6 +228,8 @@ export function useKnowledgeBase() {
     importProgress.value = null
     isImporting.value = false
     isScanning.value = false
+    isPaused.value = false
+    currentTaskId = ''
   }
 
   const uploadFile = async (file: File) => {
@@ -245,8 +284,10 @@ export function useKnowledgeBase() {
     showChunkSizeDialog, loadStats, openKB, uploadFile,
     saveChunkSize, rechunk, deleteDocument, clearAll,
     folderPath, scannedFiles, selectedFiles, isScanning, importProgress, isImporting,
+    isPaused,
     scanFolder, importFolder, toggleFile, selectAllFiles, deselectAllFiles,
     selectFilesByType, deselectFilesByType, toggleFilesByType,
+    pauseImport, resumeImport, stopImport,
     resetFolderImport, stopPolling,
   }
 }
