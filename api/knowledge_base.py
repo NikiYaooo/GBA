@@ -293,7 +293,43 @@ class KnowledgeBase:
 
         return {"success": True, "message": f"已重新分块，共 {len(new_chunks)} 个文本块"}
 
-    def search(self, query: str, top_k: int = 6) -> List[Dict[str, Any]]:
+    def search_by_categories(self, query: str, categories: List[str] = None, top_k_per_category: int = 3) -> Dict[str, List[Dict[str, Any]]]:
+        """按分类检索：对每个指定类别分别检索 top_k 个结果，返回 { category: [chunks] }。"""
+        if not self._chunks:
+            return {}
+
+        if not categories:
+            categories = ["世界观", "系统", "数值", "模板", "规范", "UI", "通用"]
+
+        # 一次性对所有 chunks 做向量检索
+        q_vec = self._encode_texts([query])
+        vec_scores = None
+        if self._vectors is not None and self._vectors.shape[0] == len(self._chunks):
+            vec_scores = (self._vectors @ q_vec[0]).astype(np.float32)
+
+        # 按类别分组并排序
+        import numpy as np
+        import jieba
+
+        cat_chunks: Dict[str, List[tuple]] = {c: [] for c in categories}
+        for i, chunk in enumerate(self._chunks):
+            meta = chunk.get("metadata", {})
+            ct = meta.get("type", "通用")
+            if ct not in cat_chunks:
+                continue
+            score = float(vec_scores[i]) if vec_scores is not None else 0.0
+            cat_chunks[ct].append((score, chunk))
+
+        result = {}
+        for cat in categories:
+            items = cat_chunks.get(cat, [])
+            items.sort(key=lambda x: x[0], reverse=True)
+            result[cat] = [
+                {"content": item[1]["content"], "metadata": item[1]["metadata"], "score": round(item[0], 4)}
+                for item in items[:top_k_per_category]
+            ]
+
+        return result
         """混合检索：向量（语义）+ BM25（关键词），用 RRF 融合返回 TopK。"""
         import numpy as np
         import jieba

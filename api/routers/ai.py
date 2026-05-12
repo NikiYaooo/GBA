@@ -59,6 +59,22 @@ async def complete_logic(payload: dict = Body(...)):
         return {"success": False, "message": f"AI 服务调用失败: {str(e)}"}
 
 
+@router.get("/prd-check-stats")
+async def prd_check_stats():
+    """返回 PRD 自检统计信息。"""
+    try:
+        svc = get_ai_service()
+        if hasattr(svc, 'checker') and svc.checker:
+            warnings = svc.checker.get_warnings()
+            return {"success": True, "data": {
+                "total_issues": len(svc.checker.history),
+                "recent_warnings": warnings,
+            }}
+        return {"success": True, "data": {"total_issues": 0, "recent_warnings": []}}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 @router.post("/generate-ui")
 async def generate_ui(payload: dict = Body(...)):
     """根据文档内容生成 UI 原型图。"""

@@ -61,6 +61,37 @@ def log_error(title: str, err: Exception, log_dir: str):
         pass
 
 
+def save_docx_to_path(content: str, name: str, output_path: str) -> str:
+    """将 HTML 内容生成为 .docx 并保存到指定路径，返回文件路径。"""
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    clean_name = name.replace('.docx', '').replace('.doc', '').strip()
+
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Microsoft YaHei'
+    style.element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft YaHei')
+
+    if clean_name:
+        h = doc.add_heading(clean_name, level=1)
+        for run in h.runs:
+            run.font.name = 'Microsoft YaHei'
+            run.element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft YaHei')
+
+    _html_to_docx(content or '', doc)
+
+    if not clean_name and not (content or '').strip():
+        doc.add_paragraph('（空文档）')
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    doc.save(output_path)
+    return output_path
+
+
 def generate_docx(content: str, name: str) -> dict:
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor

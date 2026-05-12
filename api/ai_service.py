@@ -5,6 +5,7 @@ import markdown
 from typing import List, Dict, Optional
 import httpx
 from knowledge_base import KnowledgeBase
+from prd_self_check import PRDSelfCheck
 
 
 # 各模型的 API 地址映射
@@ -22,17 +23,63 @@ MODEL_TEMPERATURES = {
     "Kimi": 1.0,
 }
 
+# 增强系统提示词：角色定位 + Few-Shot + 约束
+ENHANCED_SYSTEM_PROMPT = """你是资深游戏策划专家「张工」，拥有 15 年手游/端游全案策划经验，擅长撰写可落地、逻辑闭环的策划文档。
+
+【角色定位】
+- 你是一名严谨的系统策划，只写可落地的文档
+- 每次输出前先检查：功能是否明确？数值是否合理？边界是否覆盖？
+- 你的文档会被程序、美术、测试直接使用，必须精确、无歧义
+
+【核心规则 - 必须遵守】
+1. 禁止自创世界观、职业、玩法、数值体系 —— 必须严格基于知识库和用户需求中的内容生成
+2. 如果知识库中有冲突的设定，优先遵循知识库版本，并在文档中标注「✓ 已对齐: XXXX」
+3. 数值必须明确、可验证（如「钻石×100，每日限购1次」而非「给一些钻石」）
+4. 严格参考提供的【文档模板】格式，包括标题层级、表格样式、条目结构
+5. 不准使用模糊表述（大概、可能、若干、适量、一些）
+6. 必须包含：背景/目标、规则/流程、奖励/数值、限制/条件、UI/交互 等标准章节
+
+【输出格式要求】
+- 使用 Markdown 格式输出
+- 章节层级：## 一级标题 → ### 二级标题 → 条目式正文
+- 关键数值、规则条件加粗
+- 表格用于奖励表、数值表
+
+【Few-Shot 示例】
+以下是一个符合要求的策划案片段示例：
+```
+## 签到活动
+### 活动规则
+1. 活动持续 7 天，玩家每日登录可签到 1 次；
+2. 签到奖励通过邮件发放，有效期 24 小时；
+3. 漏签不可补签，但累计签到 7 天可获得额外大奖。
+
+### 奖励表
+| 天数 | 奖励内容 | 数量 | 是否可叠加 |
+|------|----------|------|-----------|
+| 第1天 | 金币 | ×5000 | - |
+| 第2天 | 钻石 | ×50 | - |
+| 第3天 | 装备强化石 | ×3 | - |
+| 第7天 | SSR 角色碎片 | ×10 | - |
+
+### 限制条件
+- 每日签到重置时间：05:00（服务器时间）
+- 每个角色仅可参与 1 次
+- 活动界面入口：主界面 → 活动 → 签到
+```
+"""
+
 
 class AIService:
     """
-    负责集成多个 AI 模型，并处理 RAG 逻辑
+    负责集成多个 AI 模型，并处理 RAG + PRD 自检逻辑
     """
 
-    def __init__(self, kb: KnowledgeBase = None):
+    def __init__(self, kb: KnowledgeBase = None, data_dir: str = None):
         self.kb = kb
+        self.checker = PRDSelfCheck(data_dir) if data_dir else None
 
     def _get_config(self) -> dict:
-        # 优先使用 GB_DATA_DIR 环境变量
         data_dir = os.environ.get("GB_DATA_DIR", "")
         if data_dir:
             config_path = os.path.join(data_dir, "config.json")
@@ -40,7 +87,6 @@ class AIService:
                 with open(config_path, "r", encoding="utf-8") as f:
                     return json.load(f)
 
-        # 兜底：使用 AppData
         app_data = os.environ.get("APPDATA")
         if not app_data:
             app_data = os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
@@ -96,7 +142,6 @@ class AIService:
                 "model": model_id or model_name.lower(),
                 "input": [],
             }
-            # 将标准 messages 转换为 Responses API 格式
             for msg in messages:
                 role = msg["role"]
                 content = msg["content"]
@@ -106,7 +151,6 @@ class AIService:
                         "content": [{"type": "input_text", "text": content}]
                     }
                 elif isinstance(content, list):
-                    # 多模态内容：转换 image_url → input_image, text → input_text
                     converted_parts = []
                     for part in content:
                         if part.get("type") == "text":
@@ -123,7 +167,6 @@ class AIService:
                     input_item = {"role": role, "content": [{"type": "input_text", "text": str(content)}]}
                 body["input"].append(input_item)
 
-            # temperature 参数可选
             if temperature is not None:
                 body["temperature"] = temperature
             body["max_output_tokens"] = 4096
@@ -138,10 +181,8 @@ class AIService:
                     resp = await client.post(endpoint, json=body, headers=headers)
                     if resp.status_code == 200:
                         data = resp.json()
-                        # Responses API 响应格式不同
                         output = data.get("output", [])
                         if output:
-                            # output 是消息数组，取最后一条 assistant 消息的内容
                             for out_msg in reversed(output):
                                 if out_msg.get("role") == "assistant":
                                     content_parts = out_msg.get("content", [])
@@ -188,25 +229,16 @@ class AIService:
             return f"API 调用异常: {str(e)}"
 
     def _md_to_html(self, text: str) -> str:
-        """将 AI 输出的 Markdown 文本转换为 HTML，适配 TipTap 编辑器。"""
-        # 检测是否已经是 HTML（包含完整标签）
         if re.search(r'<(h[1-6]|p|div|table|ul|ol|strong|em)[^>]*>', text):
             return text
-
-        # 预处理：移除多余的空行（保留段落分隔）
         text = re.sub(r'\n{4,}', '\n\n', text)
-
-        # 使用 markdown 库转换（extra 扩展支持表格、围栏代码等）
         html = markdown.markdown(text, extensions=['extra', 'tables', 'fenced_code', 'codehilite'])
-
-        # 后处理：清理多余的空白
         html = re.sub(r'<p>\s+', '<p>', html)
         html = re.sub(r'\s+</p>', '</p>', html)
         html = re.sub(r'<br\s*/?>\s*<br\s*/?>', '<br>', html)
         return html.strip()
 
     async def quality_check(self, model: str, doc_content: str, system_prompt: str = None) -> str:
-        """文档质检：不使用 RAG。可传入自定义 system_prompt"""
         if not system_prompt:
             system_prompt = "你是一名资深游戏策划专家，请对用户提供的策划文档进行严格质检。检查逻辑矛盾、信息缺失、边界遗漏、文案模糊、落地性和规范问题。请输出：风险等级、问题原文、分析、修改建议。"
         messages = [
@@ -216,77 +248,154 @@ class AIService:
         return await self._call_api(model, messages)
 
     async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True, output_format: str = "markdown", template_content: str = "", images: list = None) -> str:
-        """智能仿写：使用 RAG 知识库 + 文档模板增强风格和系统关联"""
-        system_prompt = """你是资深游戏策划师，精通各类游戏（手游/端游）的策划文档撰写规范，擅长结合参考文档的风格、结构、术语，仿写符合要求的策划内容，全程贴合以下规则，不偏离用户需求：
+        """增强版智能仿写：多分类 RAG + 知识约束 + 模板强制 + 自检重写 + 优化提示词"""
 
-1.仿写核心原则：严格参考用户提供的【文档模板】和【本地 RAG 知识库检索结果】（用户提供的历史策划文档、模板、术语库），保持一致的文档结构（标题层级、条目格式）、专业术语、表述风格，不添加无关内容，不改变用户要求的核心逻辑。如果用户提供了【文档模板】，必须严格按照模板的格式、章节结构、排版风格来生成文档。
-
-2.内容要求：仿写内容需具备可执行性、逻辑闭环，符合游戏策划行业规范——比如数值规则明确、流程步骤清晰、模块划分合理，避免口语化、模糊化表述（例：不说"大概给100钻石"，说"活动奖励：钻石×100，每日可领取1次"）。
-
-3.逻辑补完适配：若用户提供的仿写需求不完整（缺少流程、数值、条件等），需结合 RAG 检索到的同类策划案例，补充合理内容，保证策划文档的完整性和可落地性，补充部分需标注"【补充】"，不强行添加无关功能。
-
-4.术语规范：严格沿用 RAG 知识库中已有的项目专属术语（如奖励命名、系统名称、角色称谓等），不随意创造术语，若有新增术语，需标注说明。
-
-5.格式要求：如果用户提供了【文档模板】，必须严格按模板的格式输出（标题层级、表格样式、条目结构等）；如果没有模板，则按"章节标题→子标题→条目式描述"排版，关键信息（数值、规则、条件）加粗，符合游戏策划文档（GDD/活动策划/系统策划）的标准格式，可直接导出为Word文档。
-
-6.如果用户上传了系统原型图（UI 设计图），请仔细观察图像中界面布局、控件、功能模块，理解系统需求，将其融入生成的文档中。"""
-
-        rag_context = ""
+        # ======== Step 1: 多分类 RAG 检索 ========
+        rag_contexts = {}
         if use_rag and self.kb:
-            search_results = self.kb.search(requirements, top_k=5)
-            if search_results:
-                rag_context = "【以下是知识库中检索到的同类型历史策划案片段，请严格参考其格式、术语和结构风格进行仿写】：\n\n"
-                for i, res in enumerate(search_results):
-                    rag_context += f"--- 参考文档 {i+1}：《{res['metadata'].get('filename', '未知')}》---\n"
-                    rag_context += res['content'] + "\n\n"
+            rag_contexts = self.kb.search_by_categories(
+                requirements,
+                categories=["世界观", "系统", "数值", "模板", "规范", "UI"],
+                top_k_per_category=3,
+            )
 
-        user_text = ""
-        if rag_context:
-            user_text += rag_context
+        # ======== Step 2: 构建知识约束和 RAG 上下文 ========
+        knowledge_sections = []
+        constraint_notes = []
 
-        if template_content:
-            user_text += f"【文档模板 - 请严格按照以下模板的格式、结构、样式风格生成文档】：\n{template_content}\n\n"
+        if rag_contexts:
+            for cat in ["世界观", "系统", "数值", "规范"]:
+                items = rag_contexts.get(cat, [])
+                if items:
+                    section = f"【{cat} - 项目已有设定（必须遵守，不得自创）】\n"
+                    for i, item in enumerate(items):
+                        meta = item.get("metadata", {})
+                        source = meta.get("filename", "未知")
+                        section += f"[来源: {source}]\n{item.get('content', '')}\n\n"
+                    knowledge_sections.append(section)
+                    constraint_notes.append(f"- 本项目的{cat}已有明确设定，必须在这些设定范围内生成，不得自创新设定")
 
-        user_text += f"【用户需求】：\n{requirements}\n\n"
+            # PRD 模板类别的检索结果用于格式参考
+            template_items = rag_contexts.get("模板", [])
+            ui_items = rag_contexts.get("UI", [])
+
+        # 如果用户提供了文档模板，优先使用
+        user_template = template_content
+
+        # 近期历史问题提醒
+        recent_issues = ""
+        if self.checker:
+            recent_issues = self.checker.get_recent_issues()
+
+        # ======== Step 3: 构建用户提示词 ========
+        user_prompt_parts = []
+
+        # 3a: 知识约束
+        if constraint_notes:
+            user_prompt_parts.append("【项目已有设定约束 - 必须遵守】")
+            user_prompt_parts.extend(constraint_notes)
+            user_prompt_parts.append("")
+
+        # 3b: 插入分类 RAG 知识
+        for sec in knowledge_sections:
+            user_prompt_parts.append(sec)
+
+        # 3c: 模板参考
+        if user_template:
+            user_prompt_parts.append(f"【文档模板 - 必须严格按此模板的格式、章节结构、标题层级、样式风格生成】\n{user_template}\n")
+
+        # 3d: 用户需求
+        user_prompt_parts.append(f"【用户需求】\n{requirements}\n")
+
+        # 3e: 当前文档参考
         if doc_content:
-            user_text += f"【当前参考的文档内容】：\n{doc_content}\n\n"
-        user_text += "请输出：完整、可执行、风格统一的游戏策划内容。"
+            user_prompt_parts.append(f"【当前参考的文档内容】\n{doc_content}\n")
 
-        # 构建 messages - 支持多模态（图片）
-        messages = [{"role": "system", "content": system_prompt}]
+        # 3f: 近期历史问题
+        if recent_issues:
+            user_prompt_parts.append(recent_issues)
 
-        # 判断模型是否支持多模态视觉理解
+        # 3g: 输出指令
+        user_prompt_parts.append("请严格按照以上所有约束和模板，输出完整、可执行、逻辑闭环的游戏策划文档。")
+
+        user_text = "\n".join(user_prompt_parts)
+
+        # ======== Step 4: 构建 messages（支持多模态） ========
+        messages = [{"role": "system", "content": ENHANCED_SYSTEM_PROMPT}]
+
         vision_models = {"GPT", "Gemini"}
         has_images = images and len(images) > 0
 
         if has_images and model in vision_models:
-            # 支持 vision 的模型，使用多模态消息格式
             vision_content = []
             vision_content.append({"type": "text", "text": user_text})
             max_images = min(len(images), 6)
             for i in range(max_images):
-                data_uri = images[i]
                 vision_content.append({
                     "type": "image_url",
-                    "image_url": {"url": data_uri}
+                    "image_url": {"url": images[i]}
                 })
             if len(images) > 6:
                 vision_content.append({"type": "text", "text": f"\n（注：用户还上传了 {len(images) - 6} 张原型图未展示）"})
             messages.append({"role": "user", "content": vision_content})
         else:
-            # 不支持 vision 的模型：将图片信息作为文字说明附加到 prompt 中
             if has_images:
-                user_text += f"\n\n（用户上传了 {len(images)} 张系统原型图，请参考图片描述来理解需求。"
-                user_text += "由于当前模型不支持图片理解，请根据需求描述生成文档。）"
+                user_text += f"\n\n（用户上传了 {len(images)} 张系统原型图。当前模型不支持直接看图，请根据需求描述和原型图标题推测需求。）"
             messages.append({"role": "user", "content": user_text})
 
+        # ======== Step 5: 首次生成 ========
         response = await self._call_api(model, messages)
 
-        if rag_context:
-            response = "*(已应用 RAG 知识库检索增强)*\n\n" + response
+        # 检查是否生成了有效内容
+        if not response or len(response.strip()) < 50:
+            # 生成失败，尝试简化重试
+            retry_msg = [
+                {"role": "system", "content": "你是资深游戏策划专家。请根据用户需求生成游戏策划文档。"},
+                {"role": "user", "content": f"请为以下需求生成一份完整的游戏策划文档：\n{requirements}\n\n要求：结构完整，包含背景、规则、奖励、限制等标准章节。"}
+            ]
+            response = await self._call_api(model, retry_msg)
 
-        if images:
-            response = "*(已参考上传的系统原型图)*\n\n" + response
+        if not response:
+            response = ""
+
+        # ======== Step 6: 自检 + 重写循环 ========
+        if self.checker and response and len(response) > 50:
+            check_result = self.checker.check(response, rag_contexts)
+            max_rewrite_attempts = 1  # 最多重写 1 次
+            rewrite_attempt = 0
+
+            while not check_result["passed"] and rewrite_attempt < max_rewrite_attempts:
+                rewrite_attempt += 1
+                # 记录失败原因
+                self.checker.log_rewrite(check_result["reasons"], model)
+
+                # 构建改写提示
+                feedback_text = "【PRD 自检未通过，需要进行修订。以下是需要修正的问题】\n"
+                for reason in check_result["reasons"]:
+                    feedback_text += f"- {reason}\n"
+                feedback_text += "\n请根据以上反馈修正文档，保留原有正确内容，仅修正问题。输出修正后的完整文档。\n"
+
+                rewrite_messages = [
+                    {"role": "system", "content": "你是资深游戏策划专家，正在修订一份 PRD 文档。请根据反馈修正问题，输出完整修订版。"},
+                    {"role": "user", "content": f"【原始文档】\n{response}\n\n{feedback_text}"}
+                ]
+                new_response = await self._call_api(model, rewrite_messages)
+
+                if new_response and len(new_response) > 50:
+                    response = new_response
+                    # 重写后再次检查
+                    check_result = self.checker.check(response, rag_contexts)
+                else:
+                    break  # 重写失败，保留原版
+
+        # ======== Step 7: 添加标注并格式化 ========
+        prefix_parts = []
+        if rag_contexts:
+            prefix_parts.append("*(已应用 RAG 知识库检索增强)*")
+        if has_images:
+            prefix_parts.append("*(已参考上传的系统原型图)*")
+        if prefix_parts:
+            response = " ".join(prefix_parts) + "\n\n" + response
 
         if output_format == "html":
             response = self._md_to_html(response)
@@ -294,52 +403,47 @@ class AIService:
         return response
 
     async def complete_logic(self, model: str, doc_content: str) -> str:
-        """逻辑补完：使用 RAG 补充标准模块"""
         system_prompt = "你是一名细节严谨的游戏系统策划。请为用户的半成品/草稿文档补全缺失的标准章节（如背景、目标、流程、规则、奖励、限制、异常等），补齐边界场景、容错逻辑、互斥规则。不要篡改用户原有核心需求，仅做补充和规范化。"
-        
+
         rag_context = ""
         if self.kb:
-            # 用文档前几百个字去检索相关系统模板
             query = doc_content[:200] if len(doc_content) > 200 else doc_content
             search_results = self.kb.search(query, top_k=2)
             if search_results:
                 rag_context = "【参考的历史项目标准模板/边界规则】：\n"
                 for res in search_results:
                     rag_context += res['content'] + "\n\n"
-                    
+
         user_prompt = ""
         if rag_context:
             user_prompt += rag_context
-            
+
         user_prompt += f"【需要补完的草稿文档】：\n{doc_content}\n\n请输出补完后的完整文档，并在补充的部分做出标记（如加粗或引用）："
-        
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         response = await self._call_api(model, messages)
-        
+
         if rag_context:
             response = "*(已应用 RAG 参考项目标准模板补完)*\n\n" + response
-            
+
         return response
 
     async def generate_ui_images(self, model: str, doc_content: str, design_prompt: str, n: int = 4) -> dict:
-        """根据文档描述生成 UI 原型图（使用 DALL-E 3）。"""
         config = self._get_config()
         model_config = config.get("models", {}).get(model, {})
         api_key = model_config.get("apiKey", "")
 
         if not api_key:
-            # 尝试从 GPT 的配置中获取 key
             model_config = config.get("models", {}).get("GPT", {})
             api_key = model_config.get("apiKey", "")
 
         if not api_key:
             return {"success": False, "message": f"{model} 未配置 API Key，无法生成图片"}
 
-        # 从文档中提取关键描述（取前 1500 字）
         import re as _re
         clean_content = _re.sub(r'<[^>]+>', ' ', doc_content)
         clean_content = _re.sub(r'\s+', ' ', clean_content).strip()

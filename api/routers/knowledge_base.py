@@ -295,6 +295,20 @@ async def kb_stats():
         return {"success": False, "message": str(e)}
 
 
+@router.get("/categories")
+async def kb_categories():
+    """获取知识库中已有的分类及其文档数。"""
+    try:
+        kb = get_kb()
+        category_counts = {}
+        for c in getattr(kb, '_chunks', []):
+            ct = c.get("metadata", {}).get("type", "通用")
+            category_counts[ct] = category_counts.get(ct, 0) + 1
+        return {"success": True, "data": category_counts}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 @router.post("/chunk-size")
 async def set_kb_chunk_size(payload: dict = Body(...)):
     cmin = int(payload.get("min", 100))

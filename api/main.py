@@ -50,7 +50,7 @@ kb._chunk_size_min = _kb_config.get("chunk_size_min", 100)
 kb._chunk_size_max = _kb_config.get("chunk_size_max", 500)
 
 # 初始化 AI 服务
-ai_service = AIService(kb=kb)
+ai_service = AIService(kb=kb, data_dir=DATA_DIR)
 
 # 创建 FastAPI 应用
 app = FastAPI(title="游戏策划AI文档助手 API")
