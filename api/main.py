@@ -14,6 +14,8 @@ import routers.config as config_router
 import routers.excel as excel_router
 import routers.prompts as prompts_router
 import routers.mindmap as mindmap_router
+import routers.template as template_router
+import routers.reminders as reminders_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = get_app_data_dir()
@@ -74,6 +76,8 @@ app.include_router(config_router.router)
 app.include_router(excel_router.router)
 app.include_router(prompts_router.router)
 app.include_router(mindmap_router.router)
+app.include_router(template_router.router)
+app.include_router(reminders_router.router)
 
 
 @app.get("/")

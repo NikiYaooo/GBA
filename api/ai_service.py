@@ -255,25 +255,29 @@ class AIService:
         # 构建 messages - 支持多模态（图片）
         messages = [{"role": "system", "content": system_prompt}]
 
-        if images and len(images) > 0:
-            # 对于支持 vision 的模型，使用多模态消息格式
-            # GPT 和 Gemini 支持图片理解
+        # 判断模型是否支持多模态视觉理解
+        vision_models = {"GPT", "Gemini"}
+        has_images = images and len(images) > 0
+
+        if has_images and model in vision_models:
+            # 支持 vision 的模型，使用多模态消息格式
             vision_content = []
-            # 文本放在前面
             vision_content.append({"type": "text", "text": user_text})
-            # 添加图片（限制最多 6 张以避免 token 过多）
             max_images = min(len(images), 6)
             for i in range(max_images):
                 data_uri = images[i]
-                # data_uri 格式: "data:image/png;base64,..."
                 vision_content.append({
                     "type": "image_url",
-                    "image_url": {"url": data_uri, "detail": "high"}
+                    "image_url": {"url": data_uri}
                 })
             if len(images) > 6:
                 vision_content.append({"type": "text", "text": f"\n（注：用户还上传了 {len(images) - 6} 张原型图未展示）"})
             messages.append({"role": "user", "content": vision_content})
         else:
+            # 不支持 vision 的模型：将图片信息作为文字说明附加到 prompt 中
+            if has_images:
+                user_text += f"\n\n（用户上传了 {len(images)} 张系统原型图，请参考图片描述来理解需求。"
+                user_text += "由于当前模型不支持图片理解，请根据需求描述生成文档。）"
             messages.append({"role": "user", "content": user_text})
 
         response = await self._call_api(model, messages)

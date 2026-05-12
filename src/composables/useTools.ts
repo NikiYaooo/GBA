@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { apiUrl } from '@/utils/api'
-import type { SVNConfig, NavConfig } from '@/types'
+import type { SVNConfig, NavConfig, Reminder } from '@/types'
 
 export function useTools() {
   const showToolsDialog = ref(false)
@@ -17,6 +17,10 @@ export function useTools() {
   const newSvnPath = ref('')
   const newNavName = ref('')
   const newNavPath = ref('')
+  const svnOpenAfterUpdate = ref(true)
+  const reminders = ref<Reminder[]>([])
+  const showReminderDialog = ref(false)
+  const editingReminder = ref<any>(null)
 
   const loadConfig = async () => {
     try {
@@ -63,7 +67,7 @@ export function useTools() {
       const r = await api.runSvnUpdate(item.path, tortoisePath)
       if (r.success) {
         ElMessage.success(tortoisePath ? `已启动 TortoiseSVN 更新 ${item.name}` : `${item.name} SVN更新成功`)
-        if (api.openPath) api.openPath(item.path)
+        if (svnOpenAfterUpdate.value && api.openPath) api.openPath(item.path)
       } else {
         ElMessage.warning(`${item.name} SVN更新失败: ${r.message || ''}`)
       }
@@ -107,11 +111,49 @@ export function useTools() {
     if (!r.success) ElMessage.warning('打开失败: ' + (r.message || ''))
   }
 
-  const openTools = () => { showToolsDialog.value = true; loadConfig() }
+  // 提醒
+  const loadReminders = async () => {
+    try {
+      const r = await axios.get(apiUrl('/api/reminders'))
+      if (r.data.success) reminders.value = r.data.data || []
+    } catch { /* */ }
+  }
+
+  const saveReminder = async (data: { content: string; month: number | null; day: number | null; hour: number; minute: number }) => {
+    try {
+      if (editingReminder.value) {
+        await axios.put(apiUrl(`/api/reminders/${editingReminder.value.id}`), data)
+        ElMessage.success('提醒已更新')
+      } else {
+        await axios.post(apiUrl('/api/reminders'), data)
+        ElMessage.success('提醒已添加')
+      }
+      editingReminder.value = null
+      await loadReminders()
+    } catch { ElMessage.error('操作失败') }
+  }
+
+  const deleteReminder = async (id: string) => {
+    try {
+      await axios.delete(apiUrl(`/api/reminders/${id}`))
+      await loadReminders()
+      ElMessage.success('已删除')
+    } catch { ElMessage.error('删除失败') }
+  }
+
+  const openReminderDialog = (reminder: any = null) => {
+    editingReminder.value = reminder
+    showReminderDialog.value = true
+  }
+
+  const openTools = () => { showToolsDialog.value = true; loadConfig(); loadReminders() }
 
   return {
     showToolsDialog, showSvnDialog, showNavDialog, showAddSvnDialog, showAddNavDialog,
     svnConfigs, navConfigs, svnUpdating, newSvnName, newSvnPath, newNavName, newNavPath,
-    loadConfig, saveConfig, addSvn, removeSvn, runSvnUpdate, selectFolder, addNav, removeNav, openNavItem, openTools
+    svnOpenAfterUpdate,
+    reminders, showReminderDialog, editingReminder,
+    loadConfig, saveConfig, addSvn, removeSvn, runSvnUpdate, selectFolder, addNav, removeNav, openNavItem, openTools,
+    loadReminders, saveReminder, deleteReminder, openReminderDialog,
   }
 }

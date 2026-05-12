@@ -88,12 +88,24 @@ export interface SVNConfig {
   id: string
   name: string
   path: string
+  openAfterUpdate?: boolean
 }
 
 export interface NavConfig {
   id: string
   name: string
   path: string
+}
+
+export interface Reminder {
+  id: string
+  content: string
+  month: number | null
+  day: number | null
+  hour: number
+  minute: number
+  enabled: boolean
+  created_at?: number
 }
 
 export interface ApiResponse<T = any> {

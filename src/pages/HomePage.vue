@@ -39,6 +39,36 @@ import { useSettings } from '@/composables/useSettings'
 import { useTheme } from '@/composables/useTheme'
 import { usePrompts } from '@/composables/usePrompts'
 
+// 已通知的提醒 ID 集合（防止重复弹窗）
+const notifiedReminderIds = new Set<string>()
+let reminderPollTimer: ReturnType<typeof setInterval> | null = null
+
+const pollReminders = async () => {
+  try {
+    const r = await axios.get(apiUrl('/api/reminders/due'))
+    if (r.data.success && r.data.data) {
+      for (const rem of r.data.data) {
+        if (!notifiedReminderIds.has(rem.id)) {
+          notifiedReminderIds.add(rem.id)
+          // 使用浏览器 Notification API
+          if ('Notification' in window) {
+            if (Notification.permission === 'granted') {
+              new Notification('计划提醒', { body: rem.content })
+            } else if (Notification.permission !== 'denied') {
+              const perm = await Notification.requestPermission()
+              if (perm === 'granted') {
+                new Notification('计划提醒', { body: rem.content })
+              }
+            }
+          }
+          // 兜底：使用 alert 风格的 ElMessage
+          ElMessage.info(`⏰ 计划提醒: ${rem.content}`)
+        }
+      }
+    }
+  } catch { /* */ }
+}
+
 import NewDraftDialog from '@/components/dialogs/NewDraftDialog.vue'
 import ImageDialog from '@/components/dialogs/ImageDialog.vue'
 import ImitateDialog from '@/components/dialogs/ImitateDialog.vue'
@@ -429,7 +459,6 @@ const runImitateAndCreate = async (requirements: string, mindmapContent: string,
     const title = ai.generateDocTitle(requirements)
     const doc = await docs.createDocument(title, content, 'imitation')
     if (doc) {
-      docs.docList.value.unshift(doc)
       selectDoc(doc)
       ai.aiResult.value = ''
       ElMessage.success('仿写完成，文档已创建，已通过自动质检')
@@ -527,10 +556,18 @@ onMounted(async () => {
       tools.navConfigs.value = r.data.data.nav || []
     }
   } catch { /* */ }
+  // 启动提醒轮询（每30秒检查一次）
+  reminderPollTimer = setInterval(pollReminders, 30000)
+  pollReminders()
+  // 请求通知权限
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission()
+  }
 })
 
 onBeforeUnmount(() => {
   clearTimeout(saveTimer)
+  if (reminderPollTimer) clearInterval(reminderPollTimer)
   tiptapEditor.value?.destroy()
   document.removeEventListener('click', closeCtxMenu)
 })
@@ -946,6 +983,9 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :new-nav-name="tools.newNavName.value"
       :new-nav-path="tools.newNavPath.value"
       :svn-open-after-update="tools.svnOpenAfterUpdate.value"
+      :reminders="tools.reminders.value"
+      :show-reminder-dialog="tools.showReminderDialog.value"
+      :editing-reminder="tools.editingReminder.value"
       @update:new-svn-name="(v:string) => tools.newSvnName.value = v"
       @update:new-svn-path="(v:string) => tools.newSvnPath.value = v"
       @update:new-nav-name="(v:string) => tools.newNavName.value = v"
@@ -953,12 +993,16 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @update:show-add-svn-dialog="(v:boolean) => tools.showAddSvnDialog.value = v"
       @update:show-add-nav-dialog="(v:boolean) => tools.showAddNavDialog.value = v"
       @update:svn-open-after-update="(v:boolean) => tools.svnOpenAfterUpdate.value = v"
+      @update:show-reminder-dialog="(v:boolean) => tools.showReminderDialog.value = v"
       @add-svn="handleAddSvn"
       @remove-svn="tools.removeSvn"
       @run-svn-update="handleRunSvnUpdate"
       @add-nav="tools.addNav"
       @remove-nav="tools.removeNav"
       @open-nav-item="tools.openNavItem"
+      @open-reminder-dialog="tools.openReminderDialog"
+      @save-reminder="tools.saveReminder"
+      @delete-reminder="tools.deleteReminder"
     />
   </div>
 </template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { CheckCircle2 } from 'lucide-vue-next'
-import type { SVNConfig, NavConfig } from '@/types'
+import { CheckCircle2, Bell } from 'lucide-vue-next'
+import type { SVNConfig, NavConfig, Reminder } from '@/types'
+import ReminderDialog from './ReminderDialog.vue'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -14,6 +15,10 @@ defineProps<{
   newSvnPath: string
   newNavName: string
   newNavPath: string
+  svnOpenAfterUpdate: boolean
+  reminders: Reminder[]
+  showReminderDialog: boolean
+  editingReminder: any
 }>()
 
 const emit = defineEmits<{
@@ -23,23 +28,46 @@ const emit = defineEmits<{
   'update:newNavPath': [val: string]
   'update:showAddSvnDialog': [val: boolean]
   'update:showAddNavDialog': [val: boolean]
+  'update:svnOpenAfterUpdate': [val: boolean]
+  'update:showReminderDialog': [val: boolean]
   addSvn: []
   removeSvn: [id: string]
   runSvnUpdate: [item: SVNConfig]
   addNav: []
   removeNav: [id: string]
   openNavItem: [item: NavConfig]
+  openReminderDialog: [reminder: any]
+  saveReminder: [data: any]
+  deleteReminder: [id: string]
 }>()
+
+const formatTime = (r: Reminder) => {
+  const parts: string[] = []
+  if (r.month) parts.push(`${r.month}月`)
+  else parts.push('每月')
+  if (r.day) parts.push(`${r.day}日`)
+  else parts.push('每日')
+  parts.push(`${String(r.hour).padStart(2, '0')}:${String(r.minute).padStart(2, '0')}`)
+  return parts.join(' ')
+}
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="快捷工具" width="500px" top="8vh">
+  <el-dialog v-model="visible" title="快捷工具" width="520px" top="8vh">
     <div class="space-y-6">
       <!-- SVN 更新 -->
       <div class="border border-zinc-200 rounded-lg p-4">
         <div class="flex items-center justify-between mb-3">
           <h3 class="font-semibold text-sm">SVN 更新</h3>
-          <el-button size="small" @click="emit('update:showAddSvnDialog', true)">添加</el-button>
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-1.5 text-xs text-zinc-500 cursor-pointer select-none" @click.stop>
+              <el-checkbox
+                :model-value="svnOpenAfterUpdate" size="small"
+                @update:model-value="(v: boolean) => emit('update:svnOpenAfterUpdate', v)"
+              />更新后打开
+            </label>
+            <el-button size="small" @click="emit('update:showAddSvnDialog', true)">添加</el-button>
+          </div>
         </div>
 
         <el-dialog
@@ -109,6 +137,35 @@ const emit = defineEmits<{
           </div>
         </div>
       </div>
+
+      <!-- 计划提醒 -->
+      <div class="border border-zinc-200 rounded-lg p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-sm">计划提醒</h3>
+          <el-button size="small" @click="emit('openReminderDialog', null)">
+            <Bell class="w-3.5 h-3.5 mr-1" />添加
+          </el-button>
+        </div>
+
+        <div v-if="reminders.length === 0" class="text-xs text-zinc-400">暂无提醒</div>
+        <div v-for="r in reminders" :key="r.id" class="flex items-center justify-between py-1.5 border-b border-zinc-50 text-sm">
+          <div class="flex-1 min-w-0 mr-2">
+            <div class="truncate">{{ r.content }}</div>
+            <div class="text-xs text-zinc-400">{{ formatTime(r) }}</div>
+          </div>
+          <div class="flex gap-1 shrink-0">
+            <el-button size="small" @click="emit('openReminderDialog', r)">修改</el-button>
+            <el-button size="small" type="danger" plain @click="emit('deleteReminder', r.id)">删除</el-button>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <ReminderDialog
+      :visible="showReminderDialog"
+      :edit-reminder="editingReminder"
+      @update:visible="(v: boolean) => emit('update:showReminderDialog', v)"
+      @save="(data: any) => emit('saveReminder', data)"
+    />
   </el-dialog>
 </template>
