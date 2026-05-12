@@ -27,9 +27,9 @@ export function useAI() {
     return null
   }
 
-  const runImitation = async (requirements: string, context = '', useRag = true): Promise<string | null> => {
+  const runImitation = async (requirements: string, context = '', useRag = true, format = 'html', templateContent = '', images: string[] = []): Promise<string | null> => {
     const r = await axios.post<ApiResponse<string>>(apiUrl('/api/ai/imitate'), {
-      model: activeModel.value, requirements, context, use_rag: useRag
+      model: activeModel.value, requirements, context, use_rag: useRag, format, template_content: templateContent, images
     })
     if (r.data.success) return r.data.data || null
     return null
@@ -44,7 +44,7 @@ export function useAI() {
   }
 
   const iterate = async (prompt: string): Promise<void> => {
-    const res = await runImitation(prompt, aiResult.value, false)
+    const res = await runImitation(prompt, aiResult.value, false, 'markdown')
     if (res) aiResult.value = `【迭代修改】\n\n${res}`
   }
 

@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import markdown
 from typing import List, Dict, Optional
 import httpx
 from knowledge_base import KnowledgeBase
@@ -13,6 +15,11 @@ MODEL_ENDPOINTS = {
     "Gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     "Kimi": "https://api.moonshot.cn/v1/chat/completions",
     "GLM": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+}
+
+# 各模型允许的 temperature 值（None 表示使用默认值）
+MODEL_TEMPERATURES = {
+    "Kimi": 1.0,
 }
 
 
@@ -81,10 +88,11 @@ class AIService:
         if not endpoint:
             return f"不支持的模型: {model_name}"
 
+        temperature = MODEL_TEMPERATURES.get(model_name, 0.3)
         body = {
             "model": model_id or model_name.lower(),
             "messages": messages,
-            "temperature": 0.3,
+            "temperature": temperature,
             "max_tokens": 4096,
         }
 
@@ -110,6 +118,24 @@ class AIService:
         except Exception as e:
             return f"API 调用异常: {str(e)}"
 
+    def _md_to_html(self, text: str) -> str:
+        """将 AI 输出的 Markdown 文本转换为 HTML，适配 TipTap 编辑器。"""
+        # 检测是否已经是 HTML（包含完整标签）
+        if re.search(r'<(h[1-6]|p|div|table|ul|ol|strong|em)[^>]*>', text):
+            return text
+
+        # 预处理：移除多余的空行（保留段落分隔）
+        text = re.sub(r'\n{4,}', '\n\n', text)
+
+        # 使用 markdown 库转换（extra 扩展支持表格、围栏代码等）
+        html = markdown.markdown(text, extensions=['extra', 'tables', 'fenced_code', 'codehilite'])
+
+        # 后处理：清理多余的空白
+        html = re.sub(r'<p>\s+', '<p>', html)
+        html = re.sub(r'\s+</p>', '</p>', html)
+        html = re.sub(r'<br\s*/?>\s*<br\s*/?>', '<br>', html)
+        return html.strip()
+
     async def quality_check(self, model: str, doc_content: str, system_prompt: str = None) -> str:
         """文档质检：不使用 RAG。可传入自定义 system_prompt"""
         if not system_prompt:
@@ -120,11 +146,11 @@ class AIService:
         ]
         return await self._call_api(model, messages)
 
-    async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True) -> str:
-        """智能仿写：使用 RAG 知识库增强风格和系统关联"""
+    async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True, output_format: str = "markdown", template_content: str = "", images: list = None) -> str:
+        """智能仿写：使用 RAG 知识库 + 文档模板增强风格和系统关联"""
         system_prompt = """你是资深游戏策划师，精通各类游戏（手游/端游）的策划文档撰写规范，擅长结合参考文档的风格、结构、术语，仿写符合要求的策划内容，全程贴合以下规则，不偏离用户需求：
 
-1.仿写核心原则：严格参考【本地 RAG 知识库检索结果】（用户提供的历史策划文档、模板、术语库），保持一致的文档结构（标题层级、条目格式）、专业术语、表述风格，不添加无关内容，不改变用户要求的核心逻辑。
+1.仿写核心原则：严格参考用户提供的【文档模板】和【本地 RAG 知识库检索结果】（用户提供的历史策划文档、模板、术语库），保持一致的文档结构（标题层级、条目格式）、专业术语、表述风格，不添加无关内容，不改变用户要求的核心逻辑。如果用户提供了【文档模板】，必须严格按照模板的格式、章节结构、排版风格来生成文档。
 
 2.内容要求：仿写内容需具备可执行性、逻辑闭环，符合游戏策划行业规范——比如数值规则明确、流程步骤清晰、模块划分合理，避免口语化、模糊化表述（例：不说"大概给100钻石"，说"活动奖励：钻石×100，每日可领取1次"）。
 
@@ -132,7 +158,9 @@ class AIService:
 
 4.术语规范：严格沿用 RAG 知识库中已有的项目专属术语（如奖励命名、系统名称、角色称谓等），不随意创造术语，若有新增术语，需标注说明。
 
-5.格式要求：仿写内容按"章节标题→子标题→条目式描述"排版，关键信息（数值、规则、条件）加粗，符合游戏策划文档（GDD/活动策划/系统策划）的标准格式，可直接导出为Word文档。"""
+5.格式要求：如果用户提供了【文档模板】，必须严格按模板的格式输出（标题层级、表格样式、条目结构等）；如果没有模板，则按"章节标题→子标题→条目式描述"排版，关键信息（数值、规则、条件）加粗，符合游戏策划文档（GDD/活动策划/系统策划）的标准格式，可直接导出为Word文档。
+
+6.如果用户上传了系统原型图（UI 设计图），请仔细观察图像中界面布局、控件、功能模块，理解系统需求，将其融入生成的文档中。"""
 
         rag_context = ""
         if use_rag and self.kb:
@@ -143,27 +171,55 @@ class AIService:
                     rag_context += f"--- 参考文档 {i+1}：《{res['metadata'].get('filename', '未知')}》---\n"
                     rag_context += res['content'] + "\n\n"
 
-        user_prompt = ""
+        user_text = ""
         if rag_context:
-            user_prompt += rag_context
+            user_text += rag_context
 
-        user_prompt += f"【用户需求】：\n{requirements}\n\n"
+        if template_content:
+            user_text += f"【文档模板 - 请严格按照以下模板的格式、结构、样式风格生成文档】：\n{template_content}\n\n"
+
+        user_text += f"【用户需求】：\n{requirements}\n\n"
         if doc_content:
-            user_prompt += f"【当前参考的文档内容】：\n{doc_content}\n\n"
-        user_prompt += "请输出：完整、可执行、风格统一的游戏策划内容。"
+            user_text += f"【当前参考的文档内容】：\n{doc_content}\n\n"
+        user_text += "请输出：完整、可执行、风格统一的游戏策划内容。"
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
+        # 构建 messages - 支持多模态（图片）
+        messages = [{"role": "system", "content": system_prompt}]
+
+        if images and len(images) > 0:
+            # 对于支持 vision 的模型，使用多模态消息格式
+            # GPT-4o 和 Gemini 支持图片理解
+            vision_content = []
+            # 文本放在前面
+            vision_content.append({"type": "text", "text": user_text})
+            # 添加图片（限制最多 6 张以避免 token 过多）
+            max_images = min(len(images), 6)
+            for i in range(max_images):
+                data_uri = images[i]
+                # data_uri 格式: "data:image/png;base64,..."
+                vision_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": data_uri, "detail": "high"}
+                })
+            if len(images) > 6:
+                vision_content.append({"type": "text", "text": f"\n（注：用户还上传了 {len(images) - 6} 张原型图未展示）"})
+            messages.append({"role": "user", "content": vision_content})
+        else:
+            messages.append({"role": "user", "content": user_text})
 
         response = await self._call_api(model, messages)
 
         if rag_context:
             response = "*(已应用 RAG 知识库检索增强)*\n\n" + response
 
+        if images:
+            response = "*(已参考上传的系统原型图)*\n\n" + response
+
+        if output_format == "html":
+            response = self._md_to_html(response)
+
         return response
-        
+
     async def complete_logic(self, model: str, doc_content: str) -> str:
         """逻辑补完：使用 RAG 补充标准模块"""
         system_prompt = "你是一名细节严谨的游戏系统策划。请为用户的半成品/草稿文档补全缺失的标准章节（如背景、目标、流程、规则、奖励、限制、异常等），补齐边界场景、容错逻辑、互斥规则。不要篡改用户原有核心需求，仅做补充和规范化。"
@@ -195,3 +251,69 @@ class AIService:
             response = "*(已应用 RAG 参考项目标准模板补完)*\n\n" + response
             
         return response
+
+    async def generate_ui_images(self, model: str, doc_content: str, design_prompt: str, n: int = 4) -> dict:
+        """根据文档描述生成 UI 原型图（使用 DALL-E 3）。"""
+        config = self._get_config()
+        model_config = config.get("models", {}).get(model, {})
+        api_key = model_config.get("apiKey", "")
+
+        if not api_key:
+            # 尝试从 GPT-4o 的配置中获取 key
+            model_config = config.get("models", {}).get("GPT-4o", {})
+            api_key = model_config.get("apiKey", "")
+
+        if not api_key:
+            return {"success": False, "message": f"{model} 未配置 API Key，无法生成图片"}
+
+        # 从文档中提取关键描述（取前 1500 字）
+        import re as _re
+        clean_content = _re.sub(r'<[^>]+>', ' ', doc_content)
+        clean_content = _re.sub(r'\s+', ' ', clean_content).strip()
+        doc_excerpt = clean_content[:1500]
+
+        prompt = f"{design_prompt}\n\n文档描述：{doc_excerpt}"
+
+        endpoint = "https://api.openai.com/v1/images/generations"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": "dall-e-3",
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024",
+            "response_format": "b64_json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                images = []
+                for i in range(n):
+                    try:
+                        resp = await client.post(endpoint, json=body, headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            for item in data.get("data", []):
+                                b64 = item.get("b64_json", "")
+                                if b64:
+                                    images.append({
+                                        "index": len(images),
+                                        "data_uri": f"data:image/png;base64,{b64}",
+                                        "revised_prompt": item.get("revised_prompt", ""),
+                                    })
+                        else:
+                            err_msg = resp.text[:200]
+                            if i == 0:
+                                return {"success": False, "message": f"图片生成失败 (HTTP {resp.status_code}): {err_msg}"}
+                    except Exception as e:
+                        if i == 0:
+                            return {"success": False, "message": f"图片生成请求失败: {str(e)}"}
+
+                if not images:
+                    return {"success": False, "message": "图片生成失败，未返回有效数据"}
+
+                return {"success": True, "data": {"images": images}}
+        except Exception as e:
+            return {"success": False, "message": f"图片生成失败: {str(e)}"}

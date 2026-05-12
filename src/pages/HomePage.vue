@@ -46,6 +46,7 @@ import PromptDialog from '@/components/dialogs/PromptDialog.vue'
 import SettingsDialog from '@/components/dialogs/SettingsDialog.vue'
 import KBDialog from '@/components/dialogs/KBDialog.vue'
 import ToolsDialog from '@/components/dialogs/ToolsDialog.vue'
+import UIDialog from '@/components/dialogs/UIDialog.vue'
 
 // --- Composables ---
 const activeCategory = ref('doc')
@@ -77,6 +78,18 @@ const showImagePrompt = ref(false)
 // --- Imitate dialog ---
 const showImitateDialog = ref(false)
 
+// --- UI generation dialog ---
+const showUIDialog = ref(false)
+const handleOpenUI = () => {
+  if (!docs.currentDoc.value?.id) { ElMessage.warning('请先选择文档'); return }
+  const ext = (docs.currentDoc.value.name || '').split('.').pop()?.toLowerCase() || ''
+  if (['xlsx', 'xls'].includes(ext) || docs.currentDoc.value.category === 'excel') {
+    ElMessage.warning('仅文档支持界面生成，配置表不支持')
+    return
+  }
+  showUIDialog.value = true
+}
+
 // --- Context menu ---
 const ctxMenu = ref({ visible: false, x: 0, y: 0, doc: null as DocRecord | null })
 const closeCtxMenu = () => { ctxMenu.value.visible = false }
@@ -88,7 +101,20 @@ const showCtxMenu = (e: MouseEvent, doc: DocRecord) => {
 
 // --- Editor dirty / auto-save ---
 const editorDirty = ref(false)
+const saveStatus = ref<'saved' | 'unsaved'>('saved')
 let saveTimer: any = null
+
+// 显式保存当前文档
+const saveCurrentDoc = async () => {
+  if (!docs.currentDoc.value.id) return
+  saveStatus.value = 'saved'
+  try {
+    await axios.post(apiUrl(`/api/documents/save-file/${docs.currentDoc.value.id}`), {
+      content: docs.currentDoc.value.content
+    })
+    editorDirty.value = false
+  } catch { /* */ }
+}
 
 // --- Tiptap ---
 const fontSize = ref('16px')
@@ -114,6 +140,7 @@ const tiptapEditor = useEditor({
   editable: true,
   onUpdate: ({ editor }) => {
     editorDirty.value = true
+    saveStatus.value = 'unsaved'
     docs.currentDoc.value.content = editor.getHTML()
   },
   editorProps: {
@@ -136,6 +163,8 @@ watch(() => docs.currentDoc.value.id, async (newId) => {
         docs.currentDoc.value.content = c
         if (isHtml) tiptapEditor.value.commands.setContent(c)
         else tiptapEditor.value.commands.setContent(`<p>${c.replace(/\n/g, '</p><p>')}</p>`)
+        saveStatus.value = 'saved'
+        editorDirty.value = false
       }
     } catch { /* */ }
   }
@@ -249,6 +278,8 @@ const handleDocCommand = async (command: string, doc: DocRecord) => {
       return
     }
     const baseName = (doc.name || '文档').replace(/\.[^/.]+$/, '')
+    // 确保文档内容已加载（未左键点击过的文档需要先加载）
+    if (docs.currentDoc.value.id !== doc.id) await selectDoc(doc)
     const htmlContent = tiptapEditor.value?.getHTML() || docs.currentDoc.value.content || ''
     if (!htmlContent.trim()) { ElMessage.error('文档内容为空'); return }
     try {
@@ -387,28 +418,13 @@ const saveQualityCheckPrompt = async (val: string) => {
   } catch { /* */ }
 }
 
-const runImitateAndCreate = async (requirements: string, mindmapContent: string) => {
+const runImitateAndCreate = async (requirements: string, mindmapContent: string, templateContent: string, images: string[] = []) => {
   showImitateDialog.value = false
   ai.isProcessing.value = true
 
   try {
-    let content = await ai.runImitation(requirements, mindmapContent, true)
+    const content = await ai.runImitation(requirements, mindmapContent, true, 'html', templateContent, images)
     if (!content) { ElMessage.warning('生成失败'); return }
-
-    // Auto quality check + fix
-    try {
-      const qc = await ai.runQualityCheck(content,
-        '你是资深游戏策划，请对以下策划案进行快速质检，重点关注逻辑漏洞和内容缺失，给出简洁的修改建议（不超过200字），直接给出建议不要客套。'
-      )
-      if (qc && !qc.includes('未检测到')) {
-        const feedback = qc.length > 300 ? qc.substring(0, 300) : qc
-        const revised = await ai.runImitation(
-          `根据以下质检建议修改策划案，不说客套废话，直接输出完整文档内容。\n质检建议：${feedback}\n原始文档：${content}`,
-          content, false
-        )
-        if (revised) content = revised
-      }
-    } catch { /* */ }
 
     const title = ai.generateDocTitle(requirements)
     const doc = await docs.createDocument(title, content, 'imitation')
@@ -598,9 +614,11 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
         <div class="flex items-center gap-3 min-w-0">
           <FileEdit class="w-5 h-5 text-app-muted shrink-0" />
           <h1 class="font-semibold truncate">{{ docs.currentDoc.value.name }}</h1>
-          <span v-if="editorDirty" class="text-xs text-orange-400 shrink-0">● 未保存</span>
+          <span v-if="saveStatus === 'unsaved'" class="text-xs text-orange-400 shrink-0">● 未保存</span>
+          <span v-if="saveStatus === 'saved' && editorDirty === false && docs.currentDoc.value.id" class="text-xs text-green-500 shrink-0">● 已保存</span>
         </div>
         <div class="flex items-center gap-2 shrink-0">
+          <el-button v-if="docs.currentDoc.value.id && docs.currentDoc.value.category !== 'excel'" size="small" :disabled="saveStatus === 'saved' && !editorDirty" @click="saveCurrentDoc"><Save class="w-3.5 h-3.5 inline mr-1" />保存</el-button>
           <el-button v-if="docs.currentDoc.value.category === 'draft'" size="small" type="primary" @click="saveDraftToCategory"><Save class="w-3.5 h-3.5 inline mr-1" />保存到分类</el-button>
         </div>
       </div>
@@ -786,7 +804,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
         <div class="grid grid-cols-2 gap-2">
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="tools.openTools()"><CheckCircle2 class="w-5 h-5 text-green-600" /><span>快捷工具</span></el-button>
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="showImitateDialog = true" :loading="ai.isProcessing.value"><Sparkles class="w-5 h-5 text-purple-600" /><span>智能PRD</span></el-button>
-          <el-button class="!m-0 h-20 flex flex-col gap-2" :loading="ai.isProcessing.value" @click="openQualityCheckDialog"><RefreshCw class="w-5 h-5 text-app-primary" /><span>文档质检</span></el-button>
+          <el-button class="!m-0 h-20 flex flex-col gap-2" :loading="ai.isProcessing.value" @click="handleOpenUI"><Image class="w-5 h-5 text-blue-500" /><span>界面生成</span></el-button>
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="runLogicCompletion" :loading="ai.isProcessing.value"><Zap class="w-5 h-5 text-orange-600" /><span>逻辑补完</span></el-button>
         </div>
       </div>
@@ -820,6 +838,13 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
     <ImitateDialog
       v-model:visible="showImitateDialog"
       @submit="runImitateAndCreate"
+    />
+
+    <UIDialog
+      v-model:visible="showUIDialog"
+      :doc-content="docs.currentDoc.value.content || ''"
+      :doc-name="docs.currentDoc.value.name || ''"
+      :doc-id="docs.currentDoc.value.id || ''"
     />
 
     <PromptDialog
@@ -920,12 +945,14 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :new-svn-path="tools.newSvnPath.value"
       :new-nav-name="tools.newNavName.value"
       :new-nav-path="tools.newNavPath.value"
+      :svn-open-after-update="tools.svnOpenAfterUpdate.value"
       @update:new-svn-name="(v:string) => tools.newSvnName.value = v"
       @update:new-svn-path="(v:string) => tools.newSvnPath.value = v"
       @update:new-nav-name="(v:string) => tools.newNavName.value = v"
       @update:new-nav-path="(v:string) => tools.newNavPath.value = v"
       @update:show-add-svn-dialog="(v:boolean) => tools.showAddSvnDialog.value = v"
       @update:show-add-nav-dialog="(v:boolean) => tools.showAddNavDialog.value = v"
+      @update:svn-open-after-update="(v:boolean) => tools.svnOpenAfterUpdate.value = v"
       @add-svn="handleAddSvn"
       @remove-svn="tools.removeSvn"
       @run-svn-update="handleRunSvnUpdate"
