@@ -368,11 +368,58 @@ app.whenReady().then(async () => {
   ipcMain.handle('test-ai-model', async (_event, modelName: string, apiKey: string, modelId: string) => {
     const https = require('node:https')
     const http = require('node:http')
+
+    // 豆包：使用 Responses API
+    if (modelName === '豆包') {
+      if (!apiKey) return { success: false, error: 'API Key 未配置' }
+      const endpoint = 'https://ark.cn-beijing.volces.com/api/v3/responses'
+      const body = JSON.stringify({
+        model: modelId || 'doubao',
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'Hi' }] }],
+        max_output_tokens: 5,
+      })
+      return new Promise((resolve) => {
+        const url = new URL(endpoint)
+        const req = https.request({
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname + url.search,
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          timeout: 15000,
+        }, (res: any) => {
+          let data = ''
+          res.on('data', (chunk: string) => data += chunk)
+          res.on('end', () => {
+            if (res.statusCode === 200) resolve({ success: true })
+            else resolve({ success: false, error: `HTTP ${res.statusCode}: ${data.substring(0, 200)}` })
+          })
+        })
+        req.on('error', (err: Error) => resolve({ success: false, error: err.message }))
+        req.on('timeout', () => { req.destroy(); resolve({ success: false, error: '连接超时' }) })
+        req.write(body)
+        req.end()
+      })
+    }
+
+    // Ollama：本地调用检查
+    if (modelName === 'Ollama (本地)') {
+      const baseUrl = (modelId || 'http://localhost:11434').replace(/\/+$/, '')
+      try {
+        const r = await fetch(`${baseUrl}/api/tags`)
+        if (r.ok) return { success: true }
+        return { success: false, error: `HTTP ${r.status}` }
+      } catch (e: any) {
+        return { success: false, error: e.message }
+      }
+    }
+
     const MODEL_ENDPOINTS: Record<string, string> = {
       'DeepSeek': 'https://api.deepseek.com/v1/chat/completions',
-      'GPT-4o': 'https://api.openai.com/v1/chat/completions',
+      'GPT': 'https://api.openai.com/v1/chat/completions',
       'Kimi': 'https://api.moonshot.cn/v1/chat/completions',
       'GLM': 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+      'Gemini': 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     }
     const endpoint = MODEL_ENDPOINTS[modelName]
     if (!endpoint) return { success: false, error: `不支持的模型: ${modelName}` }

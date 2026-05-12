@@ -82,7 +82,7 @@ async def get_available_models():
             "models": [
                 {"name": "豆包", "type": "cloud", "available": True},
                 {"name": "DeepSeek", "type": "cloud", "available": True},
-                {"name": "GPT-4o", "type": "cloud", "available": True},
+                {"name": "GPT", "type": "cloud", "available": True},
                 {"name": "Gemini", "type": "cloud", "available": True},
                 {"name": "Kimi", "type": "cloud", "available": True},
                 {"name": "GLM", "type": "cloud", "available": True},

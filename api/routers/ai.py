@@ -62,7 +62,7 @@ async def complete_logic(payload: dict = Body(...)):
 @router.post("/generate-ui")
 async def generate_ui(payload: dict = Body(...)):
     """根据文档内容生成 UI 原型图。"""
-    model = payload.get("model", "GPT-4o")
+    model = payload.get("model", "GPT")
     content = payload.get("content", "")
     design_prompt = payload.get("design_prompt", "")
     count = min(int(payload.get("count", 4)), 8)

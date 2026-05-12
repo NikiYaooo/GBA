@@ -12,7 +12,7 @@ export function useAI() {
   const models = ref([
     { name: '豆包', type: 'cloud' as const },
     { name: 'DeepSeek', type: 'cloud' as const },
-    { name: 'GPT-4o', type: 'cloud' as const },
+    { name: 'GPT', type: 'cloud' as const },
     { name: 'Gemini', type: 'cloud' as const },
     { name: 'Kimi', type: 'cloud' as const },
     { name: 'GLM', type: 'cloud' as const },

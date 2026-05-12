@@ -10,8 +10,8 @@ from knowledge_base import KnowledgeBase
 # 各模型的 API 地址映射
 MODEL_ENDPOINTS = {
     "DeepSeek": "https://api.deepseek.com/v1/chat/completions",
-    "豆包": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-    "GPT-4o": "https://api.openai.com/v1/chat/completions",
+    "豆包": "https://ark.cn-beijing.volces.com/api/v3/responses",
+    "GPT": "https://api.openai.com/v1/chat/completions",
     "Gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     "Kimi": "https://api.moonshot.cn/v1/chat/completions",
     "GLM": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
@@ -89,6 +89,75 @@ class AIService:
             return f"不支持的模型: {model_name}"
 
         temperature = MODEL_TEMPERATURES.get(model_name, 0.3)
+
+        # 豆包使用 Responses API（与 OpenAI 标准格式不同）
+        if model_name == "豆包":
+            body = {
+                "model": model_id or model_name.lower(),
+                "input": [],
+            }
+            # 将标准 messages 转换为 Responses API 格式
+            for msg in messages:
+                role = msg["role"]
+                content = msg["content"]
+                if isinstance(content, str):
+                    input_item = {
+                        "role": role,
+                        "content": [{"type": "input_text", "text": content}]
+                    }
+                elif isinstance(content, list):
+                    # 多模态内容：转换 image_url → input_image, text → input_text
+                    converted_parts = []
+                    for part in content:
+                        if part.get("type") == "text":
+                            converted_parts.append({"type": "input_text", "text": part["text"]})
+                        elif part.get("type") == "image_url":
+                            converted_parts.append({
+                                "type": "input_image",
+                                "image_url": part["image_url"]["url"]
+                            })
+                        else:
+                            converted_parts.append(part)
+                    input_item = {"role": role, "content": converted_parts}
+                else:
+                    input_item = {"role": role, "content": [{"type": "input_text", "text": str(content)}]}
+                body["input"].append(input_item)
+
+            # temperature 参数可选
+            if temperature is not None:
+                body["temperature"] = temperature
+            body["max_output_tokens"] = 4096
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=300) as client:
+                    resp = await client.post(endpoint, json=body, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        # Responses API 响应格式不同
+                        output = data.get("output", [])
+                        if output:
+                            # output 是消息数组，取最后一条 assistant 消息的内容
+                            for out_msg in reversed(output):
+                                if out_msg.get("role") == "assistant":
+                                    content_parts = out_msg.get("content", [])
+                                    texts = [p.get("text", "") for p in content_parts if p.get("type") == "output_text" or p.get("text")]
+                                    if texts:
+                                        return "".join(texts)
+                        return str(data)
+                    return f"API 请求失败 (HTTP {resp.status_code}): {resp.text[:300]}"
+            except httpx.ConnectError:
+                return f"无法连接到 {model_name} 的 API 服务器，请检查网络连接和 API 地址配置"
+            except httpx.TimeoutException:
+                return f"{model_name} API 请求超时，请稍后重试"
+            except Exception as e:
+                return f"API 调用异常: {str(e)}"
+
+        # 其他模型使用 OpenAI 标准格式
         body = {
             "model": model_id or model_name.lower(),
             "messages": messages,
@@ -188,7 +257,7 @@ class AIService:
 
         if images and len(images) > 0:
             # 对于支持 vision 的模型，使用多模态消息格式
-            # GPT-4o 和 Gemini 支持图片理解
+            # GPT 和 Gemini 支持图片理解
             vision_content = []
             # 文本放在前面
             vision_content.append({"type": "text", "text": user_text})
@@ -259,8 +328,8 @@ class AIService:
         api_key = model_config.get("apiKey", "")
 
         if not api_key:
-            # 尝试从 GPT-4o 的配置中获取 key
-            model_config = config.get("models", {}).get("GPT-4o", {})
+            # 尝试从 GPT 的配置中获取 key
+            model_config = config.get("models", {}).get("GPT", {})
             api_key = model_config.get("apiKey", "")
 
         if not api_key:
