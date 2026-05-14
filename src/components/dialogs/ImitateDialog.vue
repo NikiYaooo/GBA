@@ -3,16 +3,29 @@ import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { apiUrl, getErrMsg } from '@/utils/api'
+import type { KBProject, KBSearchResult } from '@/types'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
+const props = defineProps<{
+  projects: KBProject[]
+  searchResults: KBSearchResult[]
+  searchLoading: boolean
+}>()
+
 const emit = defineEmits<{
-  submit: [requirements: string, mindmapContent: string, templateContent: string, images: string[]]
+  submit: [requirements: string, mindmapContent: string, templateContent: string, images: string[], projectId: string, kbOnly: boolean, citeSources: boolean]
+  search: [query: string, topK?: number, folderId?: string]
 }>()
 
 const requirements = ref('')
 const mindmapFileName = ref('')
 let mindmapFile: File | null = null
+
+// KB 关联
+const selectedProjectId = ref('')
+const kbOnly = ref(false)
+const citeSources = ref(false)
 
 // 原型图上传
 const uploadedImages = ref<{ dataUri: string; name: string }[]>([])
@@ -132,8 +145,18 @@ const getTemplateContent = async (): Promise<string> => {
 
 // 对话框打开时，刷新模板状态
 watch(visible, (v) => {
-  if (v) loadTemplateInfo()
+  if (v) {
+    loadTemplateInfo()
+    selectedProjectId.value = ''
+    kbOnly.value = false
+    citeSources.value = false
+  }
 })
+
+const onSearchKB = () => {
+  if (!selectedProjectId.value || !requirements.value.trim()) return
+  emit('search', requirements.value.trim(), 10)
+}
 
 const submit = async () => {
   if (!requirements.value.trim()) { ElMessage.warning('请输入需求描述'); return }
@@ -153,11 +176,14 @@ const submit = async () => {
 
   const images = uploadedImages.value.map(img => img.dataUri)
 
-  emit('submit', requirements.value.trim(), mindmapContext, templateContent, images)
+  emit('submit', requirements.value.trim(), mindmapContext, templateContent, images, selectedProjectId.value, kbOnly.value, citeSources.value)
   requirements.value = ''
   mindmapFile = null
   mindmapFileName.value = ''
   uploadedImages.value = []
+  selectedProjectId.value = ''
+  kbOnly.value = false
+  citeSources.value = false
   visible.value = false
 }
 </script>
@@ -228,6 +254,39 @@ const submit = async () => {
         </div>
         <div v-else class="text-xs text-app-muted">
           上传 .docx 模板文件，仿写时将按模板的格式生成文档
+        </div>
+      </div>
+
+      <!-- 知识库关联 -->
+      <div class="border border-app rounded-lg p-3">
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-sm font-medium text-app">知识库关联</label>
+        </div>
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-app-muted">项目:</span>
+            <el-select v-model="selectedProjectId" size="small" clearable placeholder="不关联" class="!w-48">
+              <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id">
+                <span>{{ p.name }}</span>
+                <span class="text-xs text-app-muted ml-2">({{ p.doc_count || 0 }} 文档)</span>
+              </el-option>
+            </el-select>
+            <el-button size="small" :disabled="!selectedProjectId || !requirements.trim()" @click="onSearchKB">
+              检索相关片段
+            </el-button>
+          </div>
+          <div class="flex items-center gap-4">
+            <el-checkbox v-model="kbOnly" :disabled="!selectedProjectId">仅基于知识库内容生成</el-checkbox>
+            <el-checkbox v-model="citeSources" :disabled="!selectedProjectId">引用标注（标明文档来源）</el-checkbox>
+          </div>
+          <div v-if="searchLoading" class="text-xs text-app-muted">检索中...</div>
+          <div v-else-if="searchResults.length > 0" class="max-h-32 overflow-y-auto space-y-1 border rounded p-2">
+            <div v-for="(r, i) in searchResults" :key="i" class="text-xs flex items-start gap-1">
+              <span class="text-green-600 shrink-0">&#10003;</span>
+              <span class="truncate">{{ r.metadata?.filename || '未知' }}</span>
+              <span class="text-app-muted shrink-0">({{ (r.score * 100).toFixed(0) }}%)</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

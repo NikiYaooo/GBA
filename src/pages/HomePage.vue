@@ -461,12 +461,12 @@ const saveQualityCheckPrompt = async (val: string) => {
   } catch { /* */ }
 }
 
-const runImitateAndCreate = async (requirements: string, mindmapContent: string, templateContent: string, images: string[] = []) => {
+const runImitateAndCreate = async (requirements: string, mindmapContent: string, templateContent: string, images: string[] = [], projectId = '', kbOnly = false, citeSources = false) => {
   showImitateDialog.value = false
   ai.isProcessing.value = true
 
   try {
-    const content = await ai.runImitation(requirements, mindmapContent, true, 'html', templateContent, images)
+    const content = await ai.runImitation(requirements, mindmapContent, true, 'html', templateContent, images, projectId, kbOnly, citeSources)
     if (!content) { ElMessage.warning('生成失败'); return }
 
     const title = ai.generateDocTitle(requirements)
@@ -881,6 +881,10 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
 
     <ImitateDialog
       v-model:visible="showImitateDialog"
+      :projects="kb.projects.value"
+      :search-results="kb.searchResults.value"
+      :search-loading="kb.searchLoading.value"
+      @search="kb.search"
       @submit="runImitateAndCreate"
     />
 

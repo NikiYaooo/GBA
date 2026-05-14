@@ -27,9 +27,10 @@ export function useAI() {
     return null
   }
 
-  const runImitation = async (requirements: string, context = '', useRag = true, format = 'html', templateContent = '', images: string[] = []): Promise<string | null> => {
+  const runImitation = async (requirements: string, context = '', useRag = true, format = 'html', templateContent = '', images: string[] = [], projectId = '', kbOnly = false, citeSources = false): Promise<string | null> => {
     const r = await axios.post<ApiResponse<string>>(apiUrl('/api/ai/imitate'), {
-      model: activeModel.value, requirements, context, use_rag: useRag, format, template_content: templateContent, images
+      model: activeModel.value, requirements, context, use_rag: useRag, format, template_content: templateContent, images,
+      project_id: projectId || undefined, kb_only: kbOnly, cite_sources: citeSources
     })
     if (r.data.success) return r.data.data || null
     return null
