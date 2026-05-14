@@ -75,6 +75,7 @@ import ImitateDialog from '@/components/dialogs/ImitateDialog.vue'
 import PromptDialog from '@/components/dialogs/PromptDialog.vue'
 import SettingsDialog from '@/components/dialogs/SettingsDialog.vue'
 import KBDialog from '@/components/dialogs/KBDialog.vue'
+import KBSearchPanel from '@/components/dialogs/KBSearchPanel.vue'
 import ToolsDialog from '@/components/dialogs/ToolsDialog.vue'
 import UIDialog from '@/components/dialogs/UIDialog.vue'
 
@@ -979,7 +980,16 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @remove-vocab="kb.removeVocab"
     />
 
-    <!-- <KBSearchPanel v-model:visible="showSearchPanel" /> -->
+    <KBSearchPanel
+      v-model:visible="showSearchPanel"
+      :projects="kb.projects.value"
+      :active-project-id="kb.activeProjectId.value"
+      :folders="kb.folders.value"
+      :search-results="kb.searchResults.value"
+      :search-loading="kb.searchLoading.value"
+      @search="kb.search"
+      @fuzzy-search="kb.fuzzySearch"
+    />
 
     <ToolsDialog
       v-model:visible="tools.showToolsDialog.value"
