@@ -59,31 +59,35 @@ class KBProject:
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     self.config.update(json.load(f))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[KBProject] 警告: 加载 config.json 失败: {e}")
         if os.path.exists(self.folders_path):
             try:
                 with open(self.folders_path, "r", encoding="utf-8") as f:
                     self.folders = json.load(f)
-            except Exception:
+            except Exception as e:
+                print(f"[KBProject] 警告: 加载 folders.json 失败: {e}")
                 self.folders = []
         if os.path.exists(self.documents_path):
             try:
                 with open(self.documents_path, "r", encoding="utf-8") as f:
                     self.documents = json.load(f)
-            except Exception:
+            except Exception as e:
+                print(f"[KBProject] 警告: 加载 documents.json 失败: {e}")
                 self.documents = []
         if os.path.exists(self.chunks_path):
             try:
                 with open(self.chunks_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self._chunks = data if isinstance(data, list) else data.get("chunks", [])
-            except Exception:
+            except Exception as e:
+                print(f"[KBProject] 警告: 加载 chunks.json 失败: {e}")
                 self._chunks = []
         if os.path.exists(self.vectors_path):
             try:
-                self._vectors = np.load(self.vectors_path)
-            except Exception:
+                self._vectors = np.load(self.vectors_path, allow_pickle=False)
+            except Exception as e:
+                print(f"[KBProject] 警告: 加载 vectors.npy 失败: {e}")
                 self._vectors = None
         self._apply_custom_vocab()
         self._rebuild_bm25()
@@ -247,8 +251,8 @@ class KBProject:
                 content=content,
                 doc_type=doc_type,
                 file_size=file_size,
-                folder_id=folder_id,
-                note=note,
+                folder_id=folder_id or None,
+                note=note or None,
             )
 
         # 3. 处理文件名冲突
@@ -349,6 +353,11 @@ class KBProject:
                 "section_title": ch.get("section_title", ""),
                 "chunk_index": i,
                 "added_at": int(time.time()),
+                "metadata": {
+                    "doc_id": doc_id,
+                    "folder_id": doc.get("folder_id", ""),
+                    "filename": doc.get("filename", ""),
+                },
             })
 
         # 合并到总块列表
@@ -436,18 +445,18 @@ class KBProject:
         content: str,
         doc_type: str,
         file_size: int,
-        folder_id: str = "",
-        note: str = "",
+        folder_id: str = None,
+        note: str = None,
     ) -> Dict[str, Any]:
         """覆盖更新已有 hash 的文档，保留原文件夹归属和备注。"""
         existing = self.get_doc_by_hash(file_hash)
         if not existing:
             return {"success": False, "message": "文档不存在", "doc_id": None, "chunks": 0}
 
-        # 保留原有的文件夹和备注
-        if not folder_id:
+        # 保留原有的文件夹和备注（只有传 None 才保留，传 "" 表示清空）
+        if folder_id is None:
             folder_id = existing.get("folder_id", "")
-        if not note:
+        if note is None:
             note = existing.get("note", "")
 
         # 删除旧向量块
@@ -496,14 +505,20 @@ class KBProject:
         remove_idxs = [i for i, c in enumerate(self._chunks) if c.get("doc_id") == doc_id]
         if not remove_idxs:
             return
+
+        old_chunk_count = len(self._chunks)
         # 从 chunks 中删除
         self._chunks = [c for i, c in enumerate(self._chunks) if i not in remove_idxs]
+
         # 从 vectors 中删除对应行
-        if self._vectors is not None and self._vectors.shape[0] == len(self._chunks) + len(remove_idxs):
-            valid_idxs = [i for i in remove_idxs if i < self._vectors.shape[0]]
-            if valid_idxs and valid_idxs != list(range(self._vectors.shape[0])):
-                self._vectors = np.delete(self._vectors, valid_idxs, axis=0)
-            elif valid_idxs == list(range(self._vectors.shape[0])):
+        if self._vectors is not None:
+            if self._vectors.shape[0] == old_chunk_count:
+                if sorted(remove_idxs) == list(range(old_chunk_count)):
+                    self._vectors = None
+                else:
+                    self._vectors = np.delete(self._vectors, sorted(remove_idxs), axis=0)
+            else:
+                # 形状不匹配，安全降级
                 self._vectors = None
 
     def delete_document(self, doc_id: str) -> Dict[str, Any]:
@@ -621,3 +636,373 @@ class KBProject:
         if folder_id is None:
             return list(self.documents)
         return [d for d in self.documents if d.get("folder_id") == folder_id]
+
+    # ------------------------------------------------------------------
+    # 检索
+    # ------------------------------------------------------------------
+
+    def search(self, query: str, top_k: int = 5, folder_id: str = None) -> List[Dict]:
+        """混合检索：向量语义 + BM25 关键词 + RRF 融合排序。"""
+        import numpy as np
+        import jieba
+        if not self._chunks or not query:
+            return []
+
+        # 确定需要检索的 chunk 范围
+        if folder_id:
+            chunk_indices = [i for i, c in enumerate(self._chunks)
+                            if c.get("metadata", {}).get("folder_id") == folder_id]
+            if not chunk_indices:
+                return []
+        else:
+            chunk_indices = list(range(len(self._chunks)))
+
+        # 向量检索
+        q_vec = self._encode_texts([query])
+        vec_scores = None
+        if self._vectors is not None and self._vectors.shape[0] == len(self._chunks):
+            vec_subset = self._vectors[chunk_indices]
+            vec_scores = (vec_subset @ q_vec[0]).astype(np.float32)
+
+        # BM25 检索
+        bm25_scores = {}
+        if self._bm25 is not None:
+            tokenized_query = jieba.lcut(query)
+            all_scores = self._bm25.get_scores(tokenized_query)
+            if all_scores is not None and len(all_scores) == len(self._chunks):
+                for idx in chunk_indices:
+                    if all_scores[idx] > 0:
+                        bm25_scores[self._chunks[idx]["id"]] = float(all_scores[idx])
+
+        # RRF 融合：基于排名而非分数加权
+        vec_top_k = max(top_k * 2, 10)
+
+        # 向量检索排名
+        vec_ranks = {}
+        if vec_scores is not None:
+            sorted_vec_idxs = np.argsort(-vec_scores)[:vec_top_k]
+            for rank, pos in enumerate(sorted_vec_idxs):
+                cid = self._chunks[chunk_indices[pos]]["id"]
+                vec_ranks[cid] = rank
+
+        # BM25 检索排名
+        bm25_ranks = {}
+        if bm25_scores:
+            sorted_bm25 = sorted(bm25_scores.items(), key=lambda x: -x[1])[:vec_top_k]
+            for rank, (cid, _) in enumerate(sorted_bm25):
+                bm25_ranks[cid] = rank
+
+        # RRF 融合
+        k = 60
+        rrf_scores = {}
+        for idx in chunk_indices:
+            cid = self._chunks[idx]["id"]
+            rank_v = vec_ranks.get(cid, 10000)
+            rank_b = bm25_ranks.get(cid, 10000)
+            rrf_scores[cid] = 1.0 / (k + rank_v) + 1.0 / (k + rank_b)
+
+        # 按 RRF 分数排序
+        sorted_cids = sorted(rrf_scores.items(), key=lambda x: -x[1])[:top_k]
+
+        # 找到对应索引
+        cid_to_idx = {self._chunks[i]["id"]: i for i in chunk_indices}
+        top_results = [(score, cid_to_idx[cid]) for cid, score in sorted_cids]
+
+        return [
+            {
+                "content": self._chunks[i].get("content", ""),
+                "metadata": self._chunks[i].get("metadata", {}),
+                "score": round(float(s), 4),
+            }
+            for s, i in top_results
+        ]
+
+    def fuzzy_search(self, keyword: str, folder_id: str = None) -> List[Dict]:
+        """关键词模糊检索：jieba 分词 + 子串匹配。"""
+        import jieba
+        if not keyword:
+            return []
+        keyword_lower = keyword.lower()
+        tokens = set(jieba.lcut_for_search(keyword))
+
+        matched = []
+        seen = set()
+        for c in self._chunks:
+            if folder_id:
+                meta = c.get("metadata", {})
+                if meta.get("folder_id") != folder_id:
+                    continue
+            content = c.get("content", "")
+            if not content:
+                continue
+            # 子串匹配
+            if keyword_lower in content.lower():
+                if c["id"] not in seen:
+                    seen.add(c["id"])
+                    matched.append(c)
+                    continue
+            # token 匹配
+            content_tokens = set(jieba.lcut_for_search(content))
+            if tokens & content_tokens:
+                if c["id"] not in seen:
+                    seen.add(c["id"])
+                    matched.append(c)
+
+        return [
+            {"content": c.get("content", ""), "score": 0.0}
+            for c in matched[:20]
+        ]
+
+    def search_by_categories(self, query: str, categories: List[str] = None,
+                              top_k_per_category: int = 3) -> Dict[str, List[Dict]]:
+        """按文件夹分类检索（兼容旧接口，用于 PRD 联动）。"""
+        if not categories:
+            categories = [f["name"] for f in self.folders]
+        if not categories:
+            return {"通用": self.search(query, top_k=top_k_per_category)}
+        result = {}
+        for cat in categories:
+            folder = next((f for f in self.folders if f["name"] == cat), None)
+            if folder:
+                result[cat] = self.search(query, top_k=top_k_per_category, folder_id=folder["id"])
+            else:
+                result[cat] = []
+        return result
+
+    # ------------------------------------------------------------------
+    # 备份
+    # ------------------------------------------------------------------
+
+    def create_backup(self) -> Dict:
+        """将整个项目目录打包为 zip 备份。"""
+        import zipfile
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_name = f"backup_{timestamp}.zip"
+        backup_path = os.path.join(self.backups_dir, backup_name)
+        self._save_state()
+        try:
+            with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(self.project_dir):
+                    for fn in files:
+                        fp = os.path.join(root, fn)
+                        # 跳过 backups 目录内的文件（避免嵌套备份）
+                        if root.startswith(self.backups_dir + os.sep):
+                            continue
+                        arcname = os.path.relpath(fp, self.project_dir)
+                        zf.write(fp, arcname)
+            size = os.path.getsize(backup_path)
+            return {"success": True, "filename": backup_name, "size": size}
+        except Exception as e:
+            return {"success": False, "message": f"备份失败: {e}"}
+
+    def list_backups(self) -> List[Dict]:
+        """列出所有备份文件。"""
+        if not os.path.isdir(self.backups_dir):
+            return []
+        backups = []
+        for fn in sorted(os.listdir(self.backups_dir), reverse=True):
+            if fn.endswith(".zip"):
+                fp = os.path.join(self.backups_dir, fn)
+                backups.append({
+                    "filename": fn,
+                    "size": os.path.getsize(fp),
+                    "created_at": os.path.getmtime(fp),
+                })
+        return backups
+
+    def restore_backup(self, filename: str) -> Dict:
+        """从备份 zip 恢复项目状态。"""
+        import zipfile
+        import tempfile
+        backup_path = os.path.join(self.backups_dir, filename)
+        if not os.path.exists(backup_path):
+            return {"success": False, "message": "备份文件不存在"}
+        try:
+            with zipfile.ZipFile(backup_path, "r") as zf:
+                bad = zf.testzip()
+                if bad:
+                    return {"success": False, "message": f"备份文件损坏: {bad}"}
+
+                # 检查 zip slip 路径穿越
+                for entry in zf.namelist():
+                    dest = os.path.normpath(os.path.join(self.project_dir, entry))
+                    if not dest.startswith(os.path.normpath(self.project_dir) + os.sep):
+                        return {"success": False, "message": f"备份文件包含非法路径: {entry}"}
+
+                # 先解压到临时目录
+                temp_dir = tempfile.mkdtemp(prefix="kb_restore_")
+                try:
+                    zf.extractall(temp_dir)
+                except Exception:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return {"success": False, "message": "解压备份文件失败"}
+
+                # 原子替换：清空项目目录（保留 backups），从 temp_dir 复制
+                for item in os.listdir(self.project_dir):
+                    if item == "backups":
+                        continue
+                    item_path = os.path.join(self.project_dir, item)
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                    else:
+                        try:
+                            os.remove(item_path)
+                        except Exception:
+                            pass
+
+                # 从临时目录复制
+                for item in os.listdir(temp_dir):
+                    src = os.path.join(temp_dir, item)
+                    dst = os.path.join(self.project_dir, item)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+            self._load_state()
+            return {"success": True, "message": f"已从 {filename} 恢复"}
+        except zipfile.BadZipFile:
+            return {"success": False, "message": "备份文件损坏"}
+        except Exception as e:
+            return {"success": False, "message": f"恢复失败: {e}"}
+
+    # ------------------------------------------------------------------
+    # 自定义词库
+    # ------------------------------------------------------------------
+
+    def add_vocab(self, word: str) -> Dict:
+        """添加自定义词汇到 jieba 词典。"""
+        import jieba
+        if not word:
+            return {"success": False, "message": "词汇不能为空"}
+        if word in self.config.get("custom_vocab", []):
+            return {"success": False, "message": "词汇已存在"}
+        self.config.setdefault("custom_vocab", []).append(word)
+        jieba.add_word(word)
+        self._save_state()
+        return {"success": True, "message": f"已添加: {word}"}
+
+    def remove_vocab(self, word: str) -> Dict:
+        """从自定义词库中移除词汇。"""
+        import jieba
+        if word not in self.config.get("custom_vocab", []):
+            return {"success": False, "message": "词汇不存在"}
+        self.config["custom_vocab"].remove(word)
+        jieba.del_word(word)
+        self._save_state()
+        return {"success": True, "message": f"已删除: {word}"}
+
+    # ------------------------------------------------------------------
+    # 模型管理
+    # ------------------------------------------------------------------
+
+    def switch_model(self, model_name: str) -> Dict:
+        """切换向量模型并触发全量重向量化。"""
+        valid_models = {"bge-small-zh", "bge-large-zh", "text2vec-base"}
+        if model_name not in valid_models:
+            return {"success": False, "message": f"不支持的模型: {model_name}，可选: {valid_models}"}
+        if self.config.get("embedding_model") == model_name:
+            return {"success": False, "message": "已是当前模型"}
+        self.config["embedding_model"] = model_name
+        self._model = None  # 强制重新加载
+        self._save_state()
+        return self.revectorize_all()
+
+    def revectorize_all(self) -> Dict:
+        """遍历所有文档，从 raw_docs 重新切片 + 向量化。"""
+        import numpy as np
+        try:
+            from document_parser import DocumentParser
+        except ImportError:
+            from api.document_parser import DocumentParser
+
+        new_chunks = []
+        all_vectors = []
+
+        for doc in self.documents:
+            raw_path = doc.get("raw_path", "")
+            if not raw_path or not os.path.exists(raw_path):
+                # 尝试用 file_hash 查找
+                file_hash = doc.get("file_hash", "")
+                if file_hash:
+                    for ext in [".txt", ".md", ".docx", ".xlsx", ".pdf"]:
+                        candidate = os.path.join(self.raw_docs_dir, f"{file_hash}{ext}")
+                        if os.path.exists(candidate):
+                            raw_path = candidate
+                            break
+            if not raw_path or not os.path.exists(raw_path):
+                doc["status"] = "failed"
+                continue
+
+            try:
+                content = DocumentParser.parse(raw_path)
+                if not content or len(str(content)) < 20:
+                    doc["status"] = "failed"
+                    continue
+                content = str(content)
+            except Exception:
+                doc["status"] = "failed"
+                continue
+
+            # 切片
+            cmin = self.config.get("chunk_size_min", 100)
+            cmax = self.config.get("chunk_size_max", 500)
+            # 用标题感知切片
+            import re
+            clean = re.sub(r'<[^>]+>', ' ', content)
+            clean = re.sub(r'\s+', ' ', clean).strip()
+            if not clean:
+                continue
+            heading_matches = list(re.finditer(r'^(#{1,3})\s+(.+)$', clean, re.MULTILINE))
+            if heading_matches:
+                raw_chunks = self._chunk_by_headings(clean, heading_matches, cmin, cmax)
+            else:
+                paragraphs = re.split(r'\n\s*\n', clean)
+                if len(paragraphs) > 1:
+                    raw_chunks = self._chunk_by_paragraphs(paragraphs, cmin, cmax)
+                else:
+                    raw_chunks = []
+
+            if not raw_chunks:
+                raw_chunks = self._chunk_by_tokens(clean, cmin, cmax, 0.1)
+
+            if not raw_chunks:
+                doc["status"] = "failed"
+                continue
+
+            texts = [c["content"] for c in raw_chunks]
+            try:
+                vectors = self._encode_texts(texts)
+            except Exception:
+                doc["status"] = "failed"
+                continue
+
+            doc_id = doc["id"]
+            for i, ch in enumerate(raw_chunks):
+                new_chunks.append({
+                    "id": f"{doc_id}_{i}",
+                    "doc_id": doc_id,
+                    "content": ch["content"],
+                    "section_title": ch.get("section_title", ""),
+                    "chunk_index": i,
+                    "added_at": int(time.time()),
+                    "metadata": {
+                        "doc_id": doc_id,
+                        "folder_id": doc.get("folder_id", ""),
+                        "filename": doc.get("filename", ""),
+                    },
+                })
+            all_vectors.append(vectors)
+            doc["status"] = "ready"
+            doc["chunk_count"] = len(raw_chunks)
+
+        if not new_chunks:
+            return {"success": False, "message": "没有文档需要重向量化"}
+
+        self._chunks = new_chunks
+        self._vectors = np.vstack(all_vectors) if all_vectors else None
+        self._rebuild_bm25()
+        self._save_state()
+        return {"success": True, "message": f"重向量化完成，共 {len(new_chunks)} 个文本块"}
