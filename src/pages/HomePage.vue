@@ -523,19 +523,11 @@ const handleKBUpload = async (file: File) => {
   else ElMessage.warning('入库失败')
 }
 
-const handleKBDelete = async (fileHash: string) => {
+const handleKBDelete = async (docId: string) => {
   try {
     await ElMessageBox.confirm('确定删除？', '提示', { type: 'warning' })
-    await kb.deleteDocument(fileHash)
+    await kb.deleteDocument(docId)
     ElMessage.success('已删除')
-  } catch { /* */ }
-}
-
-const handleKBClear = async () => {
-  try {
-    await ElMessageBox.confirm('确定清空知识库？', '警告', { type: 'error' })
-    await kb.clearAll()
-    ElMessage.success('已清空')
   } catch { /* */ }
 }
 
@@ -954,35 +946,37 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
 
     <KBDialog
       v-model:visible="kb.showKB.value"
+      :projects="kb.projects.value"
+      :active-project-id="kb.activeProjectId.value"
+      :folders="kb.folders.value"
+      :documents="kb.documents.value"
       :kb-stats="kb.kbStats.value"
+      :search-results="kb.searchResults.value"
+      :backups="kb.backups.value"
+      :vocab-list="kb.vocabList.value"
       :is-uploading-k-b="kb.isUploadingKB.value"
-      :chunk-size-min="kb.chunkSizeMin.value"
-      :chunk-size-max="kb.chunkSizeMax.value"
-      :show-chunk-size-dialog="kb.showChunkSizeDialog.value"
-      :folder-path="kb.folderPath.value"
-      :scanned-files="kb.scannedFiles.value"
-      :selected-files="kb.selectedFiles.value"
-      :is-scanning="kb.isScanning.value"
-      :import-progress="kb.importProgress.value"
-      :is-importing="kb.isImporting.value"
-      :is-paused="kb.isPaused.value"
-      @update:chunk-size-min="(v:number) => kb.chunkSizeMin.value = v"
-      @update:chunk-size-max="(v:number) => kb.chunkSizeMax.value = v"
-      @update:show-chunk-size-dialog="(v:boolean) => kb.showChunkSizeDialog.value = v"
-      @update:folder-path="(v:string) => kb.folderPath.value = v"
+      :search-loading="kb.searchLoading.value"
+      :loading="kb.loading.value"
+      @load-projects="kb.loadProjects"
+      @switch-project="kb.switchProject"
+      @create-project="kb.createProject"
+      @delete-project="kb.deleteProject"
+      @load-folders="kb.loadFolders"
+      @create-folder="kb.createFolder"
+      @rename-folder="kb.renameFolder"
+      @delete-folder="kb.deleteFolder"
+      @load-documents="kb.loadDocuments"
       @upload-file="handleKBUpload"
-      @scan-folder="kb.scanFolder"
-      @import-folder="kb.importFolder"
-      @toggle-file="kb.toggleFile"
-      @select-all-files="kb.selectAllFiles"
-      @deselect-all-files="kb.deselectAllFiles"
-      @toggle-by-type="kb.toggleFilesByType"
+      @update-document="kb.updateDocument"
       @delete-document="handleKBDelete"
-      @clear-all="handleKBClear"
-      @save-chunk-size="kb.saveChunkSize"
-      @pause-import="kb.pauseImport"
-      @resume-import="kb.resumeImport"
-      @stop-import="kb.stopImport"
+      @search="kb.search"
+      @fuzzy-search="kb.fuzzySearch"
+      @load-backups="kb.loadBackups"
+      @create-backup="kb.createBackup"
+      @restore-backup="kb.restoreBackup"
+      @load-vocab="kb.loadVocab"
+      @add-vocab="kb.addVocab"
+      @remove-vocab="kb.removeVocab"
     />
 
     <!-- <KBSearchPanel v-model:visible="showSearchPanel" /> -->
