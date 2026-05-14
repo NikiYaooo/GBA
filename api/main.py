@@ -41,13 +41,8 @@ if not os.path.exists(PROMPTS_DB):
     except Exception:
         pass
 
-# 初始化知识库
+# 初始化知识库（多项目管理）
 kb = KnowledgeBase(data_dir=DATA_DIR)
-
-# 从配置加载 chunk_size_min / chunk_size_max
-_kb_config = load_json(CONFIG_DB, {})
-kb._chunk_size_min = _kb_config.get("chunk_size_min", 100)
-kb._chunk_size_max = _kb_config.get("chunk_size_max", 500)
 
 # 初始化 AI 服务
 ai_service = AIService(kb=kb, data_dir=DATA_DIR)

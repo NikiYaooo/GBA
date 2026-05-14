@@ -1,452 +1,301 @@
-from __future__ import annotations
+"""api/knowledge_base.py — KBManager 多项目管理器 + 旧数据迁移。"""
+
 import os
 import json
 import time
-import hashlib
-import traceback
-import sys
-import random
+import uuid
 from typing import List, Dict, Any, Optional
+
+from kb_project import KBProject
 
 
 class KnowledgeBase:
-    """本地知识库：向量检索（本地 Embedding）+ BM25 关键词检索 + RRF 融合。"""
+    """多项目管理器（兼容旧 KnowledgeBase 接口）。"""
 
     def __init__(self, data_dir: str):
-        """初始化知识库（不在启动时加载大模型，避免阻塞后端启动）。"""
         self.data_dir = data_dir
-        os.makedirs(self.data_dir, exist_ok=True)
-
-        self.kb_dir = os.path.join(self.data_dir, "kb")
+        self.kb_dir = os.path.join(data_dir, "kb")
         os.makedirs(self.kb_dir, exist_ok=True)
 
-        self.vectors_path = os.path.join(self.kb_dir, "vectors.npy")
-        self.chunks_path = os.path.join(self.kb_dir, "chunks.json")
+        self.projects_path = os.path.join(self.kb_dir, "projects.json")
+        self._projects: List[Dict] = []
+        self._project_instances: Dict[str, KBProject] = {}
+        self._active_project_id: Optional[str] = None
 
-        self._model = None  # type: ignore
-        self._hash_vectorizer = None  # type: ignore
-        self._embedding_backend: str = "sentence_transformers"
-        self._vectors = None  # type: ignore
-        self._chunks: List[Dict[str, Any]] = []
-        self._raw_docs: List[Dict[str, Any]] = []
+        # 兼容旧接口的 chunk_size 属性（路由器直接赋值）
         self._chunk_size_min = 100
         self._chunk_size_max = 500
-        self._bm25 = None  # type: ignore
 
-        self._load_state()
+        self._load_projects()
+        self._migrate_old_data()
 
-    def _ensure_model(self):
-        """按需加载本地 Embedding 模型（首次使用会下载权重，后续走缓存）。"""
-        if self._model is not None:
-            return
-
-        try:
-            from sentence_transformers import SentenceTransformer
-            hf_home = os.path.join(self.kb_dir, "hf_cache")
-            os.makedirs(hf_home, exist_ok=True)
-            os.environ.setdefault("HF_HOME", hf_home)
-            os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(hf_home, "transformers"))
-            os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", os.path.join(hf_home, "sentence_transformers"))
-            os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-            self._model = SentenceTransformer("BAAI/bge-small-zh-v1.5")
-            self._embedding_backend = "sentence_transformers"
-        except Exception as e:
-            from sklearn.feature_extraction.text import HashingVectorizer
-            self._model = None
-            self._embedding_backend = "hashing"
-            self._hash_vectorizer = HashingVectorizer(
-                n_features=2048,
-                alternate_sign=False,
-                norm=None,
-            )
-
-    def _encode_texts(self, texts: List[str]) -> np.ndarray:
-        """将文本列表编码为向量（优先 sentence-transformers，失败则回退 hashing）。"""
-        import numpy as np
-        from sklearn.preprocessing import normalize
-        self._ensure_model()
-
-        if self._embedding_backend == "sentence_transformers" and self._model is not None:
-            vec = self._model.encode(texts, normalize_embeddings=True)
-            return np.asarray(vec, dtype=np.float32)
-
-        if self._hash_vectorizer is None:
-            from sklearn.feature_extraction.text import HashingVectorizer
-            self._hash_vectorizer = HashingVectorizer(n_features=2048, alternate_sign=False, norm=None)
-
-        sparse = self._hash_vectorizer.transform(texts)
-        sparse = normalize(sparse, norm="l2", copy=False)
-        dense = sparse.astype(np.float32).toarray()
-        return dense
-
-    def _load_state(self):
-        """从本地磁盘加载向量与分块数据。"""
-        import numpy as np
-        if os.path.exists(self.chunks_path):
+    def _load_projects(self):
+        if os.path.exists(self.projects_path):
             try:
-                with open(self.chunks_path, "r", encoding="utf-8") as f:
+                with open(self.projects_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                if isinstance(data, dict):
-                    self._chunks = data.get("chunks", [])
-                    self._raw_docs = data.get("raw_docs", [])
-                else:
-                    # 兼容旧格式（纯数组）
-                    self._chunks = data
-                    self._raw_docs = []
-            except Exception:
-                self._chunks = []
-                self._raw_docs = []
+                    self._projects = data.get("projects", [])
+                    self._active_project_id = data.get("active_project_id")
+            except Exception as e:
+                print(f"[KB] 加载 projects.json 失败: {e}")
+                self._projects = []
+        if self._projects:
+            for p in self._projects:
+                pid = p["id"]
+                pdir = os.path.join(self.kb_dir, f"project_{pid}")
+                if os.path.isdir(pdir):
+                    self._project_instances[pid] = KBProject(pdir, {
+                        "chunk_size_min": p.get("chunk_size_min", 100),
+                        "chunk_size_max": p.get("chunk_size_max", 500),
+                        "embedding_model": p.get("embedding_model", "bge-small-zh"),
+                    })
 
-        if os.path.exists(self.vectors_path):
-            try:
-                self._vectors = np.load(self.vectors_path)
-            except Exception:
-                self._vectors = None
-
-        self._rebuild_bm25()
-
-    def _save_state(self):
-        """将当前知识库状态写入磁盘（向量 + 分块元数据 + 原始文档）。"""
+    def _save_projects(self):
         data = {
-            "chunks": self._chunks,
-            "raw_docs": getattr(self, '_raw_docs', [])
+            "projects": self._projects,
+            "active_project_id": self._active_project_id,
         }
-        with open(self.chunks_path, "w", encoding="utf-8") as f:
+        with open(self.projects_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-        if self._vectors is None:
-            if os.path.exists(self.vectors_path):
-                try:
-                    os.remove(self.vectors_path)
-                except Exception:
-                    pass
-        else:
-            np.save(self.vectors_path, self._vectors)
+    def _get_project_dir(self, project_id: str) -> str:
+        return os.path.join(self.kb_dir, f"project_{project_id}")
 
-    def _rebuild_bm25(self):
-        """重建 BM25 索引（轻量，数据量不大时足够快）。"""
-        import jieba
-        from rank_bm25 import BM25Okapi
-        if not self._chunks:
-            self._bm25 = None
+    def _migrate_old_data(self):
+        """检测旧单库格式并迁移到多项目格式。"""
+        migration_flag = os.path.join(self.kb_dir, ".migrated_v2.6.2")
+        if os.path.exists(migration_flag):
             return
 
-        tokenized = [jieba.lcut(c.get("content", "")) for c in self._chunks]
-        self._bm25 = BM25Okapi(tokenized)
+        old_chunks_path = os.path.join(self.kb_dir, "chunks.json")
+        old_vectors_path = os.path.join(self.kb_dir, "vectors.npy")
+        if not os.path.exists(old_chunks_path):
+            # 无旧数据，创建默认项目
+            if not self._projects:
+                self.create_project("默认项目库", "自动创建的默认项目")
+            try:
+                open(migration_flag, "w").close()
+            except Exception:
+                pass
+            return
 
-    def get_file_hash(self, file_path: str) -> str:
-        """计算文件哈希用于去重（MD5）。"""
-        hasher = hashlib.md5()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                hasher.update(chunk)
-        return hasher.hexdigest()
-
-    def _chunk_text_tokens(self, text: str, chunk_tokens: int = None, overlap_ratio: float = 0.1) -> List[str]:
-        """按中文分词后的 token 数切块（区间随机值，10% 重叠）。"""
-        import jieba
-        import random
-        if chunk_tokens is not None:
-            pass  # 使用传入的固定值
-        else:
-            cmin = getattr(self, '_chunk_size_min', 100)
-            cmax = getattr(self, '_chunk_size_max', 500)
-            if cmin >= cmax:
-                cmax = cmin + 50
-            chunk_tokens = random.randint(cmin, cmax)
-        # 去掉 HTML 标签再分词，防止 <table>/style= 等被当成 token 产生海量无意义分块
-        import re
-        clean = re.sub(r'<[^>]+>', ' ', text)
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        if not clean:
-            return []
-        tokens = [t for t in jieba.lcut(clean) if t.strip()]
-        if not tokens:
-            return []
-
-        overlap = max(1, int(chunk_tokens * overlap_ratio))
-        chunks: List[str] = []
-        start = 0
-        while start < len(tokens):
-            end = min(len(tokens), start + chunk_tokens)
-            chunks.append("".join(tokens[start:end]))
-            if end >= len(tokens):
-                break
-            start = max(0, end - overlap)
-        return chunks
-
-    def add_document(self, file_path: str, filename: str, content: str, doc_type: str = "unknown", version: str = "v1.0", file_size: int = 0) -> Dict[str, Any]:
-        """将文档解析内容写入知识库（去重、分块、向量化、入库）。"""
-        import numpy as np
+        # 有旧数据 → 迁移到默认项目
+        import shutil
         try:
-            file_hash = self.get_file_hash(file_path)
-        except Exception as e:
-            return {"success": False, "message": f"计算文件哈希失败: {str(e)}"}
+            p = self.create_project("默认项目库", "从旧版知识库自动迁移")
+            pdir = self._get_project_dir(p["id"])
 
-        if any(c.get("metadata", {}).get("file_hash") == file_hash for c in self._chunks):
-            return {"success": False, "message": "文件已存在，跳过导入"}
+            # 复制旧数据
+            if os.path.exists(old_chunks_path):
+                shutil.copy2(old_chunks_path, os.path.join(pdir, "chunks.json"))
+            if os.path.exists(old_vectors_path):
+                shutil.copy2(old_vectors_path, os.path.join(pdir, "vectors.npy"))
 
-        # 保存原始文档内容
-        raw_doc = {
-            "file_hash": file_hash,
-            "filename": filename,
-            "content": content,
-            "doc_type": doc_type,
-            "file_size": file_size,
-            "added_at": int(time.time()),
-        }
-        # 去重
-        self._raw_docs = [d for d in getattr(self, '_raw_docs', []) if d.get("file_hash") != file_hash]
-        self._raw_docs.append(raw_doc)
+            # 从旧 chunks 中提取文档信息
+            with open(old_chunks_path, "r", encoding="utf-8") as f:
+                old_data = json.load(f)
+            old_chunks = old_data if isinstance(old_data, list) else old_data.get("chunks", [])
 
-        chunks = self._chunk_text_tokens(content)
-        if not chunks:
-            return {"success": False, "message": "文档内容为空"}
+            docs_seen = {}
+            for c in old_chunks:
+                meta = c.get("metadata", {})
+                fh = meta.get("file_hash", "unknown")
+                if fh not in docs_seen:
+                    docs_seen[fh] = {
+                        "id": fh,
+                        "file_hash": fh,
+                        "filename": meta.get("filename", "unknown"),
+                        "doc_type": meta.get("type", meta.get("doc_type", "unknown")),
+                        "file_size": meta.get("file_size", 0),
+                        "folder_id": "",
+                        "note": "",
+                        "added_at": meta.get("added_at", int(time.time())),
+                        "updated_at": int(time.time()),
+                        "chunk_count": 0,
+                        "vector_status": "vectorized",
+                    }
+                docs_seen[fh]["chunk_count"] += 1
 
-        try:
-            vectors = self._encode_texts(chunks)
-        except Exception as e:
-            return {"success": False, "message": f"向量化失败: {str(e)}"}
-
-        created_at = int(time.time())
-        new_chunk_records: List[Dict[str, Any]] = []
-        for i, chunk in enumerate(chunks):
-            new_chunk_records.append(
-                {
-                    "id": f"{file_hash}_{i}",
-                    "content": chunk,
-                    "metadata": {
-                        "filename": filename,
-                        "type": doc_type,
-                        "version": version,
-                        "file_hash": file_hash,
-                        "file_size": file_size,
-                        "chunk_index": i,
-                        "added_at": created_at,
-                    },
-                }
-            )
-
-        if self._vectors is None or len(self._chunks) == 0:
-            self._vectors = vectors
-            self._chunks = new_chunk_records
-        else:
-            self._vectors = np.vstack([self._vectors, vectors])
-            self._chunks.extend(new_chunk_records)
-
-        self._rebuild_bm25()
-        self._save_state()
-
-        return {"success": True, "message": f"成功导入 {len(chunks)} 个文本块", "chunks": len(chunks)}
-
-    def rechunk_all(self) -> Dict[str, Any]:
-        """根据当前 chunk_size_min/max 重新分块所有已有文档。"""
-        import numpy as np
-        raw_docs = getattr(self, '_raw_docs', [])
-        if not raw_docs:
-            return {"success": False, "message": "没有原始文档数据，无法重新分块"}
-
-        new_chunks: List[Dict[str, Any]] = []
-        all_vectors: List[np.ndarray] = []
-
-        for raw in raw_docs:
-            content = raw.get("content", "")
-            if not content:
-                continue
-            chunks = self._chunk_text_tokens(content)
-            if not chunks:
-                continue
-
-            file_hash = raw.get("file_hash", "unknown")
-            filename = raw.get("filename", "unknown")
-            doc_type = raw.get("doc_type", "unknown")
-            file_size = raw.get("file_size", 0)
+            # 加载到 KBProject
+            proj = self.get_project(p["id"])
+            if proj:
+                proj._chunks = old_chunks
+                proj.documents = list(docs_seen.values())
+                proj._rebuild_bm25()
+                proj._save_state()
 
             try:
-                vectors = self._encode_texts(chunks)
+                open(migration_flag, "w").close()
             except Exception:
-                continue
+                pass
+        except Exception as e:
+            print(f"[KB] 数据迁移失败: {e}")
 
-            for i, chunk in enumerate(chunks):
-                new_chunks.append({
-                    "id": f"{file_hash}_{i}",
-                    "content": chunk,
-                    "metadata": {
-                        "filename": filename,
-                        "type": doc_type,
-                        "file_hash": file_hash,
-                        "file_size": file_size,
-                        "chunk_index": i,
-                        "added_at": int(time.time()),
-                    },
-                })
-            all_vectors.append(vectors)
+    # ============ 项目管理 ============
 
-        if not new_chunks:
-            return {"success": False, "message": "重新分块后没有生成任何文本块"}
-
-        self._chunks = new_chunks
-        self._vectors = np.vstack(all_vectors) if len(all_vectors) > 0 else None
-        self._rebuild_bm25()
-        self._save_state()
-
-        return {"success": True, "message": f"已重新分块，共 {len(new_chunks)} 个文本块"}
-
-    def search_by_categories(self, query: str, categories: List[str] = None, top_k_per_category: int = 3) -> Dict[str, List[Dict[str, Any]]]:
-        """按分类检索：对每个指定类别分别检索 top_k 个结果，返回 { category: [chunks] }。"""
-        if not self._chunks:
-            return {}
-
-        if not categories:
-            categories = ["世界观", "系统", "数值", "模板", "规范", "UI", "通用"]
-
-        # 一次性对所有 chunks 做向量检索
-        q_vec = self._encode_texts([query])
-        vec_scores = None
-        if self._vectors is not None and self._vectors.shape[0] == len(self._chunks):
-            vec_scores = (self._vectors @ q_vec[0]).astype(np.float32)
-
-        # 按类别分组并排序
-        import numpy as np
-        import jieba
-
-        cat_chunks: Dict[str, List[tuple]] = {c: [] for c in categories}
-        for i, chunk in enumerate(self._chunks):
-            meta = chunk.get("metadata", {})
-            ct = meta.get("type", "通用")
-            if ct not in cat_chunks:
-                continue
-            score = float(vec_scores[i]) if vec_scores is not None else 0.0
-            cat_chunks[ct].append((score, chunk))
-
-        result = {}
-        for cat in categories:
-            items = cat_chunks.get(cat, [])
-            items.sort(key=lambda x: x[0], reverse=True)
-            result[cat] = [
-                {"content": item[1]["content"], "metadata": item[1]["metadata"], "score": round(item[0], 4)}
-                for item in items[:top_k_per_category]
-            ]
-
-        return result
-        """混合检索：向量（语义）+ BM25（关键词），用 RRF 融合返回 TopK。"""
-        import numpy as np
-        import jieba
-        if not self._chunks:
-            return []
-
-        # 向量检索
-        q_vec = self._encode_texts([query])
-
-        vec_scores = None
-        if self._vectors is not None and self._vectors.shape[0] == len(self._chunks):
-            vec_scores = (self._vectors @ q_vec[0]).astype(np.float32)
-
-        # 取向量 TopN
-        vec_rank: Dict[str, float] = {}
-        if vec_scores is not None:
-            top_n = min(len(self._chunks), max(top_k * 2, 10))
-            idxs = np.argpartition(-vec_scores, top_n - 1)[:top_n]
-            idxs = idxs[np.argsort(-vec_scores[idxs])]
-            for rank, idx in enumerate(idxs.tolist()):
-                chunk_id = self._chunks[idx]["id"]
-                vec_rank[chunk_id] = 1.0 / (rank + 1)
-
-        # BM25 检索
-        bm25_rank: Dict[str, float] = {}
-        if self._bm25 is not None:
-            tokenized_query = jieba.lcut(query)
-            scores = self._bm25.get_scores(tokenized_query)
-            scores = np.asarray(scores, dtype=np.float32)
-            top_n = min(len(self._chunks), max(top_k * 2, 10))
-            idxs = np.argpartition(-scores, top_n - 1)[:top_n]
-            idxs = idxs[np.argsort(-scores[idxs])]
-            for rank, idx in enumerate(idxs.tolist()):
-                if scores[idx] <= 0:
-                    continue
-                chunk_id = self._chunks[idx]["id"]
-                bm25_rank[chunk_id] = 1.0 / (rank + 1)
-
-        # RRF 融合
-        combined: Dict[str, float] = {}
-        for cid in set(vec_rank.keys()).union(bm25_rank.keys()):
-            combined[cid] = vec_rank.get(cid, 0) + bm25_rank.get(cid, 0)
-
-        sorted_ids = sorted(combined.keys(), key=lambda x: combined[x], reverse=True)[:top_k]
-
-        results: List[Dict[str, Any]] = []
-        id_to_idx = {c["id"]: i for i, c in enumerate(self._chunks)}
-        for cid in sorted_ids:
-            idx = id_to_idx.get(cid)
-            if idx is None:
-                continue
-            results.append(
-                {
-                    "content": self._chunks[idx].get("content", ""),
-                    "metadata": self._chunks[idx].get("metadata", {}),
-                    "score": float(combined.get(cid, 0)),
-                }
-            )
-
-        return results
-
-    def get_stats(self) -> Dict[str, Any]:
-        """返回知识库概览：文档数、向量块数、文档列表、库大小。"""
-        if not self._chunks:
-            return {"total_documents": 0, "total_chunks": 0, "documents": [], "total_size_bytes": 0, "vector_count": 0}
-
-        docs: Dict[str, Dict[str, Any]] = {}
-        for c in self._chunks:
-            meta = c.get("metadata", {})
-            fh = meta.get("file_hash")
-            if not fh:
-                continue
-            if fh not in docs:
-                docs[fh] = {
-                    "file_hash": fh,
-                    "filename": meta.get("filename", ""),
-                    "type": meta.get("type", "unknown"),
-                    "version": meta.get("version", "v1.0"),
-                    "added_at": meta.get("added_at", 0),
-                    "file_size": meta.get("file_size", 0),
-                    "chunks_count": 0,
-                }
-            docs[fh]["chunks_count"] += 1
-
-        documents = sorted(docs.values(), key=lambda x: x.get("added_at", 0), reverse=True)
-        total_size = sum(d.get("file_size", 0) for d in documents)
-        return {
-            "total_documents": len(documents),
-            "total_chunks": len(self._chunks),
-            "total_size_bytes": total_size,
-            "vector_count": len(self._vectors) if self._vectors is not None else 0,
-            "documents": documents,
+    def create_project(self, name: str, description: str = "",
+                       embedding_model: str = "bge-small-zh") -> Dict:
+        pid = uuid.uuid4().hex[:12]
+        now = int(time.time())
+        project = {
+            "id": pid,
+            "name": name,
+            "description": description,
+            "type": "personal",
+            "embedding_model": embedding_model,
+            "chunk_size_min": 100,
+            "chunk_size_max": 500,
+            "created_at": now,
+            "updated_at": now,
+            "archived": False,
         }
+        self._projects.append(project)
 
-    def delete_document(self, file_hash: str) -> Dict[str, Any]:
-        """删除某个文档的所有分块（含向量）。"""
-        keep_idxs = [i for i, c in enumerate(self._chunks) if c.get("metadata", {}).get("file_hash") != file_hash]
-        if len(keep_idxs) == len(self._chunks):
+        pdir = self._get_project_dir(pid)
+        os.makedirs(pdir, exist_ok=True)
+        proj = KBProject(pdir, {
+            "chunk_size_min": 100,
+            "chunk_size_max": 500,
+            "embedding_model": embedding_model,
+        })
+        self._project_instances[pid] = proj
+
+        if not self._active_project_id:
+            self._active_project_id = pid
+        self._save_projects()
+        return project
+
+    def list_projects(self) -> List[Dict]:
+        result = []
+        for p in self._projects:
+            proj = self._project_instances.get(p["id"])
+            doc_count = len(proj.documents) if proj else 0
+            result.append({**p, "doc_count": doc_count})
+        return result
+
+    def get_project(self, project_id: str) -> Optional[KBProject]:
+        return self._project_instances.get(project_id)
+
+    def get_project_info(self, project_id: str) -> Optional[Dict]:
+        for p in self._projects:
+            if p["id"] == project_id:
+                return p
+        return None
+
+    def update_project(self, project_id: str, updates: dict) -> Dict:
+        proj_info = self.get_project_info(project_id)
+        if not proj_info:
+            return {"success": False, "message": "项目不存在"}
+        for key in ["name", "description"]:
+            if key in updates:
+                proj_info[key] = updates[key]
+        proj_info["updated_at"] = int(time.time())
+        self._save_projects()
+        return {"success": True}
+
+    def delete_project(self, project_id: str) -> Dict:
+        if project_id not in [p["id"] for p in self._projects]:
+            return {"success": False, "message": "项目不存在"}
+        self._projects = [p for p in self._projects if p["id"] != project_id]
+        self._project_instances.pop(project_id, None)
+        pdir = self._get_project_dir(project_id)
+        if os.path.isdir(pdir):
+            import shutil
+            shutil.rmtree(pdir, ignore_errors=True)
+        if self._active_project_id == project_id:
+            self._active_project_id = self._projects[0]["id"] if self._projects else None
+        self._save_projects()
+        return {"success": True}
+
+    # ============ 兼容旧接口 ============
+
+    def get_stats(self) -> Dict:
+        if not self._active_project_id:
+            return {"total_documents": 0, "total_chunks": 0, "total_size_bytes": 0,
+                    "vector_count": 0, "documents": []}
+        proj = self.get_project(self._active_project_id)
+        if not proj:
+            return {"total_documents": 0, "total_chunks": 0, "total_size_bytes": 0,
+                    "vector_count": 0, "documents": []}
+        stats = proj.get_stats()
+        docs_list = []
+        for d in proj.documents:
+            docs_list.append({
+                "file_hash": d.get("file_hash", d["id"]),
+                "filename": d["filename"],
+                "type": d.get("doc_type", "unknown"),
+                "chunks_count": d.get("chunk_count", 0),
+                "file_size": d.get("file_size", 0),
+                "added_at": d.get("added_at", 0),
+            })
+        stats["documents"] = docs_list
+        return stats
+
+    def add_document(self, file_path, filename, content, doc_type="unknown",
+                     version="v1.0", file_size=0) -> Dict:
+        if not self._active_project_id:
+            return {"success": False, "message": "没有活跃项目"}
+        proj = self.get_project(self._active_project_id)
+        if not proj:
+            return {"success": False, "message": "项目不存在"}
+        return proj.add_document(file_path, filename, content, doc_type, file_size)
+
+    def search(self, query, top_k=5):
+        if not self._active_project_id:
+            return []
+        proj = self.get_project(self._active_project_id)
+        if not proj:
+            return []
+        return proj.search(query, top_k=top_k)
+
+    def search_by_categories(self, query, categories=None, top_k_per_category=3):
+        if not self._active_project_id:
+            return {}
+        proj = self.get_project(self._active_project_id)
+        if not proj:
+            return {}
+        return proj.search_by_categories(query, categories, top_k_per_category)
+
+    def delete_document(self, file_hash: str) -> Dict:
+        """通过 file_hash 删除文档（兼容旧接口）。"""
+        if not self._active_project_id:
+            return {"success": False, "message": "没有活跃项目"}
+        proj = self.get_project(self._active_project_id)
+        if not proj:
+            return {"success": False, "message": "项目不存在"}
+        # KBProject.delete_document 接受 doc_id，需要通过 file_hash 查找
+        doc = proj.get_doc_by_hash(file_hash)
+        if not doc:
             return {"success": False, "message": "未找到该文档"}
+        return proj.delete_document(doc["id"])
 
-        self._chunks = [self._chunks[i] for i in keep_idxs]
-        # 同时删除 raw_docs 中对应的文档
-        self._raw_docs = [d for d in getattr(self, '_raw_docs', []) if d.get("file_hash") != file_hash]
-        if self._vectors is not None and self._vectors.shape[0] >= len(keep_idxs):
-            self._vectors = self._vectors[keep_idxs]
-        else:
-            self._vectors = None
-
-        self._rebuild_bm25()
-        self._save_state()
+    def clear_all(self) -> Dict:
+        if not self._active_project_id:
+            return {"success": False, "message": "没有活跃项目"}
+        proj = self.get_project(self._active_project_id)
+        if not proj:
+            return {"success": False, "message": "项目不存在"}
+        proj.documents = []
+        proj._chunks = []
+        proj._vectors = None
+        proj._save_state()
         return {"success": True}
 
-    def clear_all(self) -> Dict[str, Any]:
-        """清空知识库。"""
-        self._chunks = []
-        self._raw_docs = []
-        self._vectors = None
-        self._bm25 = None
-        self._save_state()
-        return {"success": True}
+    # ============ 路由器兼容属性与方法 ============
+
+    @property
+    def _chunks(self) -> List[Dict]:
+        """兼容旧接口：获取当前活跃项目的 chunks。"""
+        proj = self.get_project(self._active_project_id)
+        if proj:
+            return proj._chunks
+        return []
+
+    def rechunk_all(self) -> Dict:
+        """兼容旧接口：对当前活跃项目执行重新分块+向量化。"""
+        if not self._active_project_id:
+            return {"success": False, "message": "没有活跃项目"}
+        proj = self.get_project(self._active_project_id)
+        if not proj:
+            return {"success": False, "message": "项目不存在"}
+        return proj.revectorize_all()
