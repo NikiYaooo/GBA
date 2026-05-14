@@ -113,3 +113,54 @@ export interface ApiResponse<T = any> {
   data?: T
   message?: string
 }
+
+// ========== 知识库 v2.6.2 类型 ==========
+
+export interface KBProject {
+  id: string
+  name: string
+  description?: string
+  type: 'personal' | 'team'
+  embedding_model: string
+  chunk_size_min: number
+  chunk_size_max: number
+  created_at: number
+  updated_at: number
+  archived: boolean
+  doc_count?: number
+}
+
+export interface KBFolder {
+  id: string
+  name: string
+  created_at: number
+}
+
+export interface KBDocumentV2 {
+  id: string
+  file_hash: string
+  filename: string
+  doc_type: string
+  file_size: number
+  folder_id: string
+  note: string
+  added_at: number
+  updated_at: number
+  chunk_count: number
+  vector_status: string
+  status?: string
+}
+
+export interface KBSearchResult {
+  content: string
+  metadata?: Record<string, any>
+  score: number
+  project_name?: string
+  project_id?: string
+}
+
+export interface KBBackup {
+  filename: string
+  size: number
+  created_at: number
+}

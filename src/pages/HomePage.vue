@@ -108,6 +108,18 @@ const showImagePrompt = ref(false)
 // --- Imitate dialog ---
 const showImitateDialog = ref(false)
 
+// KB 检索面板快捷键
+const showSearchPanel = ref(false)
+const handleKeydown = (e: KeyboardEvent) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    // 如果编辑器或输入框在焦点中，不拦截
+    const tag = (e.target as HTMLElement)?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
+    e.preventDefault()
+    showSearchPanel.value = !showSearchPanel.value
+  }
+}
+
 // --- UI generation dialog ---
 const showUIDialog = ref(false)
 const handleOpenUI = () => {
@@ -543,6 +555,7 @@ const handleRunSvnUpdate = async (item: { id: string; name: string; path: string
 // --- Init ---
 onMounted(async () => {
   document.addEventListener('click', closeCtxMenu)
+  document.addEventListener('keydown', handleKeydown)
   await backend.waitForReady()
   const api = (window as any).electronAPI
   if (api?.getAutoStartStatus) settings.autoStart.value = await api.getAutoStartStatus()
@@ -570,6 +583,7 @@ onBeforeUnmount(() => {
   if (reminderPollTimer) clearInterval(reminderPollTimer)
   tiptapEditor.value?.destroy()
   document.removeEventListener('click', closeCtxMenu)
+  document.removeEventListener('keydown', handleKeydown)
 })
 
 const formatDate = (ts: number) => new Date(ts * 1000).toLocaleString()
@@ -970,6 +984,8 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @resume-import="kb.resumeImport"
       @stop-import="kb.stopImport"
     />
+
+    <!-- <KBSearchPanel v-model:visible="showSearchPanel" /> -->
 
     <ToolsDialog
       v-model:visible="tools.showToolsDialog.value"
