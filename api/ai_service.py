@@ -247,17 +247,26 @@ class AIService:
         ]
         return await self._call_api(model, messages)
 
-    async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True, output_format: str = "markdown", template_content: str = "", images: list = None) -> str:
+    async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True, output_format: str = "markdown", template_content: str = "", images: list = None, project_id: str = "", kb_only: bool = False, cite_sources: bool = False) -> str:
         """增强版智能仿写：多分类 RAG + 知识约束 + 模板强制 + 自检重写 + 优化提示词"""
 
         # ======== Step 1: 多分类 RAG 检索 ========
         rag_contexts = {}
         if use_rag and self.kb:
-            rag_contexts = self.kb.search_by_categories(
-                requirements,
-                categories=["世界观", "系统", "数值", "模板", "规范", "UI"],
-                top_k_per_category=3,
-            )
+            if project_id:
+                proj = self.kb.get_project(project_id)
+                if proj:
+                    rag_contexts = proj.search_by_categories(
+                        requirements,
+                        categories=["世界观", "系统", "数值", "模板", "规范", "UI"],
+                        top_k_per_category=3,
+                    )
+            else:
+                rag_contexts = self.kb.search_by_categories(
+                    requirements,
+                    categories=["世界观", "系统", "数值", "模板", "规范", "UI"],
+                    top_k_per_category=3,
+                )
 
         # ======== Step 2: 构建知识约束和 RAG 上下文 ========
         knowledge_sections = []
@@ -321,7 +330,14 @@ class AIService:
         user_text = "\n".join(user_prompt_parts)
 
         # ======== Step 4: 构建 messages（支持多模态） ========
-        messages = [{"role": "system", "content": ENHANCED_SYSTEM_PROMPT}]
+        system_prompt = ENHANCED_SYSTEM_PROMPT
+        if kb_only:
+            system_prompt += """
+
+【额外约束 - 仅基于知识库】
+你只能使用上面提供的「项目已有设定」内容来生成文档。如果知识库中没有相关信息，请明确说明「知识库中无此设定，无法生成」。严禁编造任何知识库中没有的世界观、系统、数值、角色、玩法等内容。"""
+
+        messages = [{"role": "system", "content": system_prompt}]
 
         vision_models = {"GPT", "Gemini"}
         has_images = images and len(images) > 0
@@ -397,18 +413,39 @@ class AIService:
         if prefix_parts:
             response = " ".join(prefix_parts) + "\n\n" + response
 
+        if cite_sources and rag_contexts:
+            # 收集所有引用的文档来源
+            sources = set()
+            for cat_items in rag_contexts.values():
+                for item in cat_items:
+                    meta = item.get("metadata", {})
+                    fname = meta.get("filename", "") if isinstance(meta, dict) else ""
+                    if fname:
+                        sources.add(fname)
+            if sources:
+                citation_section = "\n\n---\n**引用来源：**\n"
+                for s in sorted(sources):
+                    citation_section += f"- {s}\n"
+                response += citation_section
+
         if output_format == "html":
             response = self._md_to_html(response)
 
         return response
 
-    async def complete_logic(self, model: str, doc_content: str) -> str:
+    async def complete_logic(self, model: str, doc_content: str, project_id: str = "") -> str:
         system_prompt = "你是一名细节严谨的游戏系统策划。请为用户的半成品/草稿文档补全缺失的标准章节（如背景、目标、流程、规则、奖励、限制、异常等），补齐边界场景、容错逻辑、互斥规则。不要篡改用户原有核心需求，仅做补充和规范化。"
 
         rag_context = ""
         if self.kb:
             query = doc_content[:200] if len(doc_content) > 200 else doc_content
-            search_results = self.kb.search(query, top_k=2)
+            search_results = []
+            if project_id:
+                proj = self.kb.get_project(project_id)
+                if proj:
+                    search_results = proj.search(query, top_k=2)
+            else:
+                search_results = self.kb.search(query, top_k=2)
             if search_results:
                 rag_context = "【参考的历史项目标准模板/边界规则】：\n"
                 for res in search_results:

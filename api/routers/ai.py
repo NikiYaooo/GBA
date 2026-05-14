@@ -33,12 +33,20 @@ async def imitate(payload: dict = Body(...)):
     output_format = payload.get("format", "html")  # 默认输出 HTML（适配 TipTap）
     template_content = payload.get("template_content", "")
     images = payload.get("images", [])  # base64 data URI 数组
+    project_id = payload.get("project_id", "")
+    kb_only = payload.get("kb_only", False)
+    cite_sources = payload.get("cite_sources", False)
 
     if not requirements:
         raise HTTPException(status_code=400, detail="需求不能为空")
 
     try:
-        result = await get_ai_service().imitate(model, requirements, context, use_rag=use_rag, output_format=output_format, template_content=template_content, images=images)
+        result = await get_ai_service().imitate(
+            model, requirements, context, use_rag=use_rag,
+            output_format=output_format, template_content=template_content,
+            images=images, project_id=project_id,
+            kb_only=kb_only, cite_sources=cite_sources,
+        )
         return {"success": True, "data": result}
     except Exception as e:
         return {"success": False, "message": f"AI 服务调用失败: {str(e)}"}
@@ -48,12 +56,13 @@ async def imitate(payload: dict = Body(...)):
 async def complete_logic(payload: dict = Body(...)):
     model = payload.get("model", "DeepSeek")
     content = payload.get("content", "")
+    project_id = payload.get("project_id", "")
 
     if not content:
         raise HTTPException(status_code=400, detail="内容不能为空")
 
     try:
-        result = await get_ai_service().complete_logic(model, content)
+        result = await get_ai_service().complete_logic(model, content, project_id=project_id)
         return {"success": True, "data": result}
     except Exception as e:
         return {"success": False, "message": f"AI 服务调用失败: {str(e)}"}
