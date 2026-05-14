@@ -6,6 +6,7 @@ import time
 import hashlib
 import shutil
 import uuid
+import re
 from typing import List, Dict, Any, Optional
 
 
@@ -84,6 +85,7 @@ class KBProject:
                 self._vectors = np.load(self.vectors_path)
             except Exception:
                 self._vectors = None
+        self._apply_custom_vocab()
         self._rebuild_bm25()
 
     def _save_state(self):
@@ -108,20 +110,68 @@ class KBProject:
             np.save(self.vectors_path, self._vectors)
 
     # ------------------------------------------------------------------
-    # 占位方法（Task 2 实现）
+    # 向量化与 BM25
     # ------------------------------------------------------------------
 
     def _rebuild_bm25(self):
-        """重建 BM25 索引 — Task 2 实现。"""
-        pass
+        """重建 BM25 索引。"""
+        import jieba
+        from rank_bm25 import BM25Okapi
+        if not self._chunks:
+            self._bm25 = None
+            return
+        tokenized = [jieba.lcut(c.get("content", "")) for c in self._chunks]
+        self._bm25 = BM25Okapi(tokenized)
+
+    def _ensure_model(self):
+        """加载 embedding 模型，失败时回退到 hashing 向量化。"""
+        if self._model is not None:
+            return
+        model_name = self.config.get("embedding_model", "bge-small-zh")
+        try:
+            from sentence_transformers import SentenceTransformer
+            hf_home = os.path.join(os.path.dirname(self.project_dir), "hf_cache")
+            os.makedirs(hf_home, exist_ok=True)
+            os.environ.setdefault("HF_HOME", hf_home)
+            os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(hf_home, "transformers"))
+            os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", os.path.join(hf_home, "sentence_transformers"))
+            os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+            model_map = {
+                "bge-small-zh": "BAAI/bge-small-zh-v1.5",
+                "bge-large-zh": "BAAI/bge-large-zh-v1.5",
+                "text2vec-base": "shibing624/text2vec-base-chinese",
+            }
+            hf_model = model_map.get(model_name, "BAAI/bge-small-zh-v1.5")
+            self._model = SentenceTransformer(hf_model)
+            self._embedding_backend = "sentence_transformers"
+        except Exception:
+            from sklearn.feature_extraction.text import HashingVectorizer
+            self._model = None
+            self._embedding_backend = "hashing"
+            self._hash_vectorizer = HashingVectorizer(n_features=2048, alternate_sign=False, norm=None)
+
+    def _apply_custom_vocab(self):
+        """向 jieba 添加自定义词汇。"""
+        import jieba
+        for word in self.config.get("custom_vocab", []):
+            jieba.add_word(word)
 
     def _encode_texts(self, texts: List[str]) -> Any:
-        """将文本列表编码为向量 — Task 2 实现。"""
+        """将文本列表编码为向量 — sentence-transformers 优先，HashingVectorizer 回退。"""
         import numpy as np
-        # Task 1 中返回空矩阵作为占位
+        from sklearn.preprocessing import normalize
         if not texts:
             return np.array([], dtype=np.float32)
-        return np.zeros((len(texts), 768), dtype=np.float32)
+        self._ensure_model()
+        if self._embedding_backend == "sentence_transformers" and self._model is not None:
+            vec = self._model.encode(texts, normalize_embeddings=True)
+            return np.asarray(vec, dtype=np.float32)
+        if self._hash_vectorizer is None:
+            from sklearn.feature_extraction.text import HashingVectorizer
+            self._hash_vectorizer = HashingVectorizer(n_features=2048, alternate_sign=False, norm=None)
+        sparse = self._hash_vectorizer.transform(texts)
+        sparse = normalize(sparse, norm="l2", copy=False)
+        return sparse.astype(np.float32).toarray()
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -228,25 +278,155 @@ class KBProject:
         }
         self.documents.append(doc)
 
-        # 6. 自动切片向量化（占位 — Task 2 实现实际逻辑）
+        # 6. 自动切片向量化
         self._chunk_document(doc_id, content)
+
+        # 找到实际生成的块数
+        doc_entry = next((d for d in self.documents if d["id"] == doc_id), None)
+        chunk_count = doc_entry.get("chunk_count", 0) if doc_entry else 0
 
         self._save_state()
         return {
             "success": True,
             "message": "文档已添加",
             "doc_id": doc_id,
-            "chunks": 0,
+            "chunks": chunk_count,
         }
 
     def _chunk_document(self, doc_id: str, content: str):
-        """对文档进行切片和向量化（占位 — Task 2 实现）。"""
-        # Task 1: 仅创建文档记录，不实际切片
-        # 找到文档并标记状态
-        for doc in self.documents:
-            if doc.get("id") == doc_id:
-                doc["status"] = "ready"
+        """智能切片：标题感知 → 段落合并 → token 回退。"""
+        import re, jieba, random
+        if not content or not content.strip():
+            return
+
+        clean = re.sub(r'<[^>]+>', ' ', content)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        if not clean:
+            return
+
+        cmin = self.config.get("chunk_size_min", 100)
+        cmax = self.config.get("chunk_size_max", 500)
+        overlap_ratio = 0.1
+
+        # 找到文档
+        doc = next((d for d in self.documents if d["id"] == doc_id), None)
+        if not doc:
+            return
+
+        # Step 1: 尝试按 Markdown 标题分割
+        heading_pattern = re.compile(r'^(#{1,3})\s+(.+)$', re.MULTILINE)
+        heading_matches = list(heading_pattern.finditer(clean))
+
+        if heading_matches:
+            raw_chunks = self._chunk_by_headings(clean, heading_matches, cmin, cmax)
+        else:
+            # Step 2: 按段落分割
+            paragraphs = re.split(r'\n\s*\n', clean)
+            if len(paragraphs) > 1:
+                raw_chunks = self._chunk_by_paragraphs(paragraphs, cmin, cmax)
+            else:
+                # Step 3: token 回退
+                raw_chunks = self._chunk_by_tokens(clean, cmin, cmax, overlap_ratio)
+
+        if not raw_chunks:
+            return
+
+        # 向量化
+        texts = [c["content"] for c in raw_chunks]
+        try:
+            vectors = self._encode_texts(texts)
+        except Exception:
+            doc["status"] = "failed"
+            return
+
+        # 创建块记录
+        new_chunks = []
+        for i, ch in enumerate(raw_chunks):
+            new_chunks.append({
+                "id": f"{doc_id}_{i}",
+                "doc_id": doc_id,
+                "content": ch["content"],
+                "section_title": ch.get("section_title", ""),
+                "chunk_index": i,
+                "added_at": int(time.time()),
+            })
+
+        # 合并到总块列表
+        if self._vectors is None or len(self._chunks) == 0:
+            self._vectors = vectors
+            self._chunks = new_chunks
+        else:
+            import numpy as np
+            self._vectors = np.vstack([self._vectors, vectors])
+            self._chunks.extend(new_chunks)
+
+        doc["status"] = "ready"
+        doc["chunk_count"] = len(new_chunks)
+        self._rebuild_bm25()
+
+    def _chunk_by_headings(self, text, heading_matches, cmin, cmax):
+        import re
+        chunks = []
+        for i, match in enumerate(heading_matches):
+            start = match.end()
+            end = heading_matches[i + 1].start() if i + 1 < len(heading_matches) else len(text)
+            section_text = text[start:end].strip()
+            if not section_text:
+                continue
+            title = match.group(2).strip()
+            if len(section_text) > cmax:
+                sub_paras = [p.strip() for p in re.split(r'\n\s*\n', section_text) if p.strip()]
+                current, current_len = [], 0
+                for para in sub_paras:
+                    if current_len + len(para) > cmax and current:
+                        chunks.append({"content": "\n".join(current), "section_title": title})
+                        current, current_len = [para], len(para)
+                    else:
+                        current.append(para)
+                        current_len += len(para)
+                if current and len("\n".join(current)) >= cmin:
+                    chunks.append({"content": "\n".join(current), "section_title": title})
+            else:
+                if len(section_text) >= cmin:
+                    chunks.append({"content": section_text, "section_title": title})
+        return chunks
+
+    def _chunk_by_paragraphs(self, paragraphs, cmin, cmax):
+        chunks = []
+        current, current_len = [], 0
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            if current_len + len(para) > cmax and current:
+                chunks.append({"content": "\n".join(current), "section_title": ""})
+                current, current_len = [para], len(para)
+            else:
+                current.append(para)
+                current_len += len(para)
+        if current:
+            combined = "\n".join(current)
+            if len(combined) >= cmin:
+                chunks.append({"content": combined, "section_title": ""})
+        return chunks
+
+    def _chunk_by_tokens(self, text, cmin, cmax, overlap_ratio):
+        import jieba, random
+        chunk_tokens = random.randint(cmin, cmax)
+        tokens = [t for t in jieba.lcut(text) if t.strip()]
+        if not tokens:
+            return []
+        overlap = max(1, int(chunk_tokens * overlap_ratio))
+        chunks = []
+        start = 0
+        while start < len(tokens):
+            end = min(len(tokens), start + chunk_tokens)
+            chunk_text = "".join(tokens[start:end])
+            chunks.append({"content": chunk_text, "section_title": ""})
+            if end >= len(tokens):
                 break
+            start = max(0, end - overlap)
+        return chunks
 
     def _update_document(
         self,
@@ -290,25 +470,41 @@ class KBProject:
         existing["status"] = "pending"
         existing["raw_path"] = raw_path
 
-        # 重新切片向量化（占位）
+        # 重新切片向量化
         self._chunk_document(existing["id"], content)
+
+        # 找到实际生成的块数
+        doc_entry = next((d for d in self.documents if d["id"] == existing["id"]), None)
+        chunk_count = doc_entry.get("chunk_count", 0) if doc_entry else 0
 
         self._save_state()
         return {
             "success": True,
             "message": "文档已更新",
             "doc_id": existing["id"],
-            "chunks": 0,
+            "chunks": chunk_count,
         }
 
     def _remove_doc_vectors(self, file_hash: str):
-        """删除文档对应的文本块（暂时不操作 vectors numpy 矩阵）。"""
+        """删除文档对应的文本块和向量。"""
+        import numpy as np
         doc = self.get_doc_by_hash(file_hash)
         if doc is None:
             return
         doc_id = doc["id"]
-        self._chunks = [c for c in self._chunks if c.get("doc_id") != doc_id]
-        # 注意：vectors.npy 将在 Task 2 中处理
+        # 找该文档在 chunks 中的索引范围
+        remove_idxs = [i for i, c in enumerate(self._chunks) if c.get("doc_id") == doc_id]
+        if not remove_idxs:
+            return
+        # 从 chunks 中删除
+        self._chunks = [c for i, c in enumerate(self._chunks) if i not in remove_idxs]
+        # 从 vectors 中删除对应行
+        if self._vectors is not None and self._vectors.shape[0] == len(self._chunks) + len(remove_idxs):
+            valid_idxs = [i for i in remove_idxs if i < self._vectors.shape[0]]
+            if valid_idxs and valid_idxs != list(range(self._vectors.shape[0])):
+                self._vectors = np.delete(self._vectors, valid_idxs, axis=0)
+            elif valid_idxs == list(range(self._vectors.shape[0])):
+                self._vectors = None
 
     def delete_document(self, doc_id: str) -> Dict[str, Any]:
         """删除文档及其所有块。"""
