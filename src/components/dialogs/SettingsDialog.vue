@@ -18,6 +18,7 @@ const props = defineProps<{
   models: { name: string; type: 'cloud' | 'local' }[]
   modelConfigs: Record<string, ModelConfig>
   testingModel: string
+  testingImageModel: string
   professionsFull: Profession[]
   selectedImitationProfession: string
   editingProfessionId: string
@@ -33,6 +34,7 @@ const emit = defineEmits<{
   'update:tortoiseSvnPath': [val: string]
   saveConfig: []
   testModel: [modelName: string]
+  testImageModel: [modelName: string]
   onProfessionChange: [profId: string]
   'update:isDark': [val: boolean]
   'update:newPromptName': [val: string]
@@ -187,8 +189,18 @@ const setImageModelConfig = (name: string, key: string, value: string) => {
                   @update:model-value="(v: string) => setImageModelConfig(model.name, 'modelId', v)"
                 />
               </div>
+              <el-button
+                v-if="getImageModelConfig(model.name).apiKey || getImageModelConfig(model.name).modelId"
+                size="small" :loading="testingImageModel === model.name"
+                @click="emit('testImageModel', model.name)"
+              >
+                连接测试
+              </el-button>
             </div>
           </div>
+        </div>
+        <div class="mt-4 flex justify-end">
+          <el-button type="primary" @click="emit('saveConfig')">保存生图配置</el-button>
         </div>
       </el-tab-pane>
 

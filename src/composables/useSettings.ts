@@ -1,7 +1,7 @@
 import { ref, type Ref } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import { apiUrl } from '@/utils/api'
+import { apiUrl, getErrMsg } from '@/utils/api'
 import type { ModelConfig } from '@/types'
 
 export function useSettings(models: Ref<{ name: string; type: 'cloud' | 'local' }[]>) {
@@ -68,6 +68,25 @@ export function useSettings(models: Ref<{ name: string; type: 'cloud' | 'local' 
     } finally { testingModel.value = '' }
   }
 
+  const testingImageModel = ref('')
+
+  const testImageModel = async (modelName: string) => {
+    const cfg = modelConfigs.value[modelName]
+    if (!cfg) { ElMessage.warning('请先填写配置'); return }
+    testingImageModel.value = modelName
+    try {
+      const r = await axios.post(apiUrl('/api/image/test-model'), {
+        model: modelName,
+        apiKey: cfg.apiKey,
+        modelId: cfg.modelId,
+      })
+      if (r.data.success) ElMessage.success(`${modelName} 连接成功`)
+      else ElMessage.warning(`${modelName} 连接失败: ${r.data.message || '未知错误'}`)
+    } catch (e: any) {
+      ElMessage.error('测试失败: ' + getErrMsg(e))
+    } finally { testingImageModel.value = '' }
+  }
+
   const handleAutoStartChange = async (val: boolean) => {
     const api = (window as any).electronAPI
     if (api?.toggleAutoStart) {
@@ -84,7 +103,8 @@ export function useSettings(models: Ref<{ name: string; type: 'cloud' | 'local' 
 
   return {
     showSettings, autoStart, tortoiseSvnPath, modelConfigs, testingModel, dataPath,
-    loadConfig, saveConfig, testModel, handleAutoStartChange, openSettings,
+    testingImageModel,
+    loadConfig, saveConfig, testModel, testImageModel, handleAutoStartChange, openSettings,
     loadDataPath, saveDataPath,
   }
 }

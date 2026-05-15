@@ -202,6 +202,59 @@ async def generate_image(payload: dict = Body(...)):
     return {"success": False, "message": f"{model_name} 暂未实现，敬请期待"}
 
 
+@router.post("/api/image/test-model")
+async def test_image_model(payload: dict = Body(...)):
+    """测试生图模型连接是否可用"""
+    model_name = payload.get("model", "")
+    api_key = payload.get("apiKey", "")
+    model_id = payload.get("modelId", "")
+
+    if not model_name:
+        return {"success": False, "message": "未指定模型"}
+
+    if model_name == "GPT-Image 2":
+        if not api_key:
+            return {"success": False, "message": "缺少 API Key"}
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        body = {"model": "dall-e-3", "prompt": "test", "n": 1, "size": "1024x1024"}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post("https://api.openai.com/v1/images/generations", json=body, headers=headers)
+                if resp.status_code == 200:
+                    return {"success": True, "message": "连接成功"}
+                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code})"}
+        except Exception as e:
+            return {"success": False, "message": f"连接异常: {str(e)}"}
+
+    if model_name == "豆包Seedream":
+        if not api_key:
+            return {"success": False, "message": "缺少 API Key"}
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        body = {"model": model_id or "seedream-2-0", "prompt": "test", "n": 1, "size": "1024x1024"}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post("https://ark.cn-beijing.volces.com/api/v3/images/generations", json=body, headers=headers)
+                if resp.status_code == 200:
+                    return {"success": True, "message": "连接成功"}
+                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code})"}
+        except Exception as e:
+            return {"success": False, "message": f"连接异常: {str(e)}"}
+
+    if model_name == "Stable Diffusion（本地）":
+        base_url = (model_id or "http://127.0.0.1:7860").rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(f"{base_url}/sdapi/v1/options", timeout=5)
+                if resp.status_code == 200:
+                    return {"success": True, "message": "连接成功"}
+                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code})"}
+        except Exception as e:
+            return {"success": False, "message": f"连接异常: {str(e)}"}
+
+    # Midjourney / Google Banana
+    return {"success": False, "message": f"{model_name} 暂不支持连接测试"}
+
+
 @router.post("/api/image/edit")
 async def edit_image(payload: dict = Body(...)):
     """修改图片（inpaint）"""
