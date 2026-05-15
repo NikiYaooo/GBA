@@ -1,5 +1,6 @@
 """图片生成 API 路由（生图、修改、提示增强）"""
 
+import asyncio
 import json
 import httpx
 from fastapi import APIRouter, Body
@@ -18,9 +19,34 @@ def _get_config():
     return {"models": {}}
 
 
+QWEN_TASK_POLL_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+
+
+async def _poll_qwen_task(task_id: str, api_key: str, timeout: float = 120) -> dict | None:
+    """Poll DashScope task endpoint until completion or timeout."""
+    headers = {"Authorization": f"Bearer {api_key}"}
+    deadline = asyncio.get_event_loop().time() + timeout
+    async with httpx.AsyncClient(timeout=10) as client:
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                resp = await client.get(QWEN_TASK_POLL_URL.format(task_id=task_id), headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    status = data.get("output", {}).get("task_status", "")
+                    if status == "SUCCEEDED":
+                        return data
+                    if status in ("FAILED", "CANCELED"):
+                        return None
+                # else: retry
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+    return None  # timeout
+
+
 IMAGE_MODEL_ENDPOINTS = {
     "GPT-Image 2": "https://api.openai.com/v1/images/generations",
-    "Qwen-Image 2": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation",
+    "Qwen-Image 2": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-to-image/text-to-image-generation",
     "Midjourney": "",
     "Google Banana": "",
     "豆包Seedream": "",
@@ -189,21 +215,33 @@ async def generate_image(payload: dict = Body(...)):
             "parameters": {"size": "1024x1024"},
         }
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(IMAGE_MODEL_ENDPOINTS["Qwen-Image 2"], json=body, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
+                    task_status = data.get("output", {}).get("task_status", "")
+                    # Handle async task polling
+                    if task_status in ("PENDING", "RUNNING"):
+                        task_id = data.get("output", {}).get("task_id", "")
+                        if task_id:
+                            poll_result = await _poll_qwen_task(task_id, api_key)
+                            if poll_result:
+                                data = poll_result
+                            else:
+                                return {"success": False, "message": "生图任务超时或失败"}
                     results = data.get("output", {}).get("results", [])
                     if results and results[0].get("image"):
                         b64 = results[0]["image"]
-                        # May have data:image prefix, ensure we have it
                         if not b64.startswith("data:"):
                             b64 = f"data:image/png;base64,{b64}"
                         return {"success": True, "data": {"data_uri": b64, "revised_prompt": prompt}}
+                    return {"success": False, "message": "生图未返回图片结果"}
                 detail = ""
                 try: detail = resp.text[:300]
                 except: pass
                 return {"success": False, "message": f"生图失败 (HTTP {resp.status_code}) {detail}".strip()}
+        except httpx.TimeoutException:
+            return {"success": False, "message": "生图请求超时"}
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
@@ -512,20 +550,32 @@ async def edit_image(payload: dict = Body(...)):
         if qwen_mask_b64:
             body["input"]["mask"] = f"data:image/png;base64,{qwen_mask_b64}"
         try:
-            async with httpx.AsyncClient(timeout=180) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(IMAGE_MODEL_ENDPOINTS.get("Qwen-Image 2", ""), json=body, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
+                    task_status = data.get("output", {}).get("task_status", "")
+                    if task_status in ("PENDING", "RUNNING"):
+                        task_id = data.get("output", {}).get("task_id", "")
+                        if task_id:
+                            poll_result = await _poll_qwen_task(task_id, api_key)
+                            if poll_result:
+                                data = poll_result
+                            else:
+                                return {"success": False, "message": "修改任务超时或失败"}
                     results = data.get("output", {}).get("results", [])
                     if results and results[0].get("image"):
                         b64 = results[0]["image"]
                         if not b64.startswith("data:"):
                             b64 = f"data:image/png;base64,{b64}"
                         return {"success": True, "data": {"data_uri": b64}}
+                    return {"success": False, "message": "修改未返回图片结果"}
                 detail = ""
                 try: detail = resp.text[:300]
                 except: pass
                 return {"success": False, "message": f"修改失败 (HTTP {resp.status_code}) {detail}".strip()}
+        except httpx.TimeoutException:
+            return {"success": False, "message": "修改请求超时"}
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
