@@ -6,6 +6,7 @@ const visible = defineModel<boolean>('visible', { default: false })
 
 const imageModels = [
   { name: 'GPT-Image 2', type: 'cloud' as const },
+  { name: 'Qwen-Image 2', type: 'cloud' as const },
   { name: 'Midjourney', type: 'cloud' as const },
   { name: 'Google Banana', type: 'cloud' as const },
   { name: '豆包Seedream', type: 'cloud' as const },

@@ -28,6 +28,7 @@ import HorizontalRule from '@tiptap/extension-horizontal-rule'
 
 import { apiUrl, getErrMsg } from '@/utils/api'
 import type { DocRecord, CategoryDef } from '@/types'
+import type { ImageLibRecord } from '@/composables/useImageLibrary'
 
 import { useBackend } from '@/composables/useBackend'
 import { useDocuments } from '@/composables/useDocuments'
@@ -106,6 +107,21 @@ const settings = useSettings(ai.models)
 const theme = useTheme()
 const prompts = usePrompts()
 const imageLib = useImageLibrary()
+
+// --- Image search ---
+const imageSearchQuery = ref('')
+const searchQuery = computed({
+  get: () => activeCategory.value === 'image' ? imageSearchQuery.value : docs.searchQuery.value,
+  set: (val: string) => {
+    if (activeCategory.value === 'image') imageSearchQuery.value = val
+    else docs.searchQuery.value = val
+  },
+})
+const filteredImages = computed(() => {
+  const q = imageSearchQuery.value.toLowerCase().trim()
+  if (!q) return imageLib.images.value
+  return imageLib.images.value.filter((img: ImageLibRecord) => img.name.toLowerCase().includes(q))
+})
 
 // --- Draft state ---
 const showNewDraftDialog = ref(false)
@@ -678,7 +694,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
           <el-button v-if="activeCategory !== 'image'" link @click="kb.openKB()"><Database class="w-4 h-4 text-app-muted" /></el-button>
           <el-button link @click="openSettings"><Settings class="w-4 h-4 text-app-muted" /></el-button>
         </div>
-        <el-input v-if="activeCategory !== 'image'" v-model="docs.searchQuery.value" placeholder="搜索..." :prefix-icon="Search" size="small" clearable />
+        <el-input v-model="searchQuery" placeholder="搜索..." :prefix-icon="Search" size="small" clearable />
       </div>
       <div class="px-2 pt-2 pb-2 flex-1 overflow-y-auto" @click="closeCtxMenu(), closeImgCtxMenu()">
         <div class="flex gap-1 mb-3 border-b border-app-light pb-2">
@@ -723,7 +739,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
           </div>
           <div class="space-y-1">
             <div
-              v-for="img in imageLib.images.value" :key="img.id"
+              v-for="img in filteredImages" :key="img.id"
               @click="handleImageClick(img)"
               @contextmenu.prevent.stop="showImgCtxMenu($event, img)"
               class="flex items-center gap-2 p-1.5 rounded-md cursor-pointer transition-colors text-sm hover:bg-app-hover text-app-secondary"
@@ -733,7 +749,10 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
               </span>
               <span class="truncate flex-1 text-left">{{ img.name }}</span>
             </div>
-            <div v-if="imageLib.images.value.length === 0" class="text-center text-app-muted py-6 text-sm">
+            <div v-if="filteredImages.length === 0 && imageSearchQuery" class="text-center text-app-muted py-6 text-sm">
+              无匹配图片
+            </div>
+            <div v-else-if="imageLib.images.value.length === 0" class="text-center text-app-muted py-6 text-sm">
               暂无图片，使用图片工具生成后保存
             </div>
           </div>

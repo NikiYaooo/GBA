@@ -20,6 +20,7 @@ def _get_config():
 
 IMAGE_MODEL_ENDPOINTS = {
     "GPT-Image 2": "https://api.openai.com/v1/images/generations",
+    "Qwen-Image 2": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation",
     "Midjourney": "",
     "Google Banana": "",
     "豆包Seedream": "",
@@ -172,6 +173,40 @@ async def generate_image(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
+    # Qwen-Image 2（通义万相）
+    if model_name == "Qwen-Image 2":
+        cfg = model_configs.get("Qwen-Image 2", {})
+        api_key = cfg.get("apiKey", "")
+        if not api_key:
+            return {"success": False, "message": "Qwen-Image 2 未配置 API Key，请先在设置中配置"}
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": "qwen-image-2.0",
+            "input": {"prompt": prompt},
+            "parameters": {"size": "1024x1024"},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(IMAGE_MODEL_ENDPOINTS["Qwen-Image 2"], json=body, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results = data.get("output", {}).get("results", [])
+                    if results and results[0].get("image"):
+                        b64 = results[0]["image"]
+                        # May have data:image prefix, ensure we have it
+                        if not b64.startswith("data:"):
+                            b64 = f"data:image/png;base64,{b64}"
+                        return {"success": True, "data": {"data_uri": b64, "revised_prompt": prompt}}
+                detail = ""
+                try: detail = resp.text[:300]
+                except: pass
+                return {"success": False, "message": f"生图失败 (HTTP {resp.status_code}) {detail}".strip()}
+        except Exception as e:
+            return {"success": False, "message": f"请求异常: {str(e)}"}
+
     # Stable Diffusion（本地）
     if model_name == "Stable Diffusion（本地）":
         cfg = model_configs.get("Stable Diffusion（本地）", {})
@@ -241,6 +276,27 @@ async def test_image_model(payload: dict = Body(...)):
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post("https://ark.cn-beijing.volces.com/api/v3/images/generations", json=body, headers=headers)
+                if resp.status_code == 200:
+                    return {"success": True, "message": "连接成功"}
+                detail = ""
+                try: detail = resp.text[:200]
+                except: pass
+                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code}) {detail}".strip()}
+        except Exception as e:
+            return {"success": False, "message": f"连接异常: {str(e)}"}
+
+    if model_name == "Qwen-Image 2":
+        if not api_key:
+            return {"success": False, "message": "缺少 API Key"}
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        body = {
+            "model": "qwen-image-2.0",
+            "input": {"prompt": "test"},
+            "parameters": {"size": "1024x1024"},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(IMAGE_MODEL_ENDPOINTS["Qwen-Image 2"], json=body, headers=headers)
                 if resp.status_code == 200:
                     return {"success": True, "message": "连接成功"}
                 detail = ""
@@ -402,3 +458,75 @@ async def edit_image(payload: dict = Body(...)):
                 return {"success": False, "message": f"修改失败 (HTTP {resp.status_code}) {detail}".strip()}
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
+
+    # Qwen-Image 2 修改（支持涂抹局部重绘）
+    if model_name == "Qwen-Image 2":
+        cfg = model_configs.get("Qwen-Image 2", {})
+        api_key = cfg.get("apiKey", "")
+        if not api_key:
+            return {"success": False, "message": "Qwen-Image 2 未配置 API Key"}
+        import base64 as b64mod
+        from PIL import Image as PILImg
+        import io
+        header, b64data = data_uri.split(",", 1)
+        img_bytes = b64mod.b64decode(b64data)
+        # 转换 mask：前端格式（不透明白=保留，透明=修改）→ Qwen格式（白=修改，黑=保留）
+        if mask_uri:
+            try:
+                m_header, m_b64 = mask_uri.split(",", 1)
+                mask_bytes = b64mod.b64decode(m_b64)
+                mask_pil = PILImg.open(io.BytesIO(mask_bytes)).convert("RGBA")
+                # Resize mask to match original image
+                orig_pil = PILImg.open(io.BytesIO(img_bytes))
+                if mask_pil.size != orig_pil.size:
+                    mask_pil = mask_pil.resize(orig_pil.size, PILImg.NEAREST)
+                # Invert: transparent (alpha < 250) → white (edit), opaque → black (keep)
+                qwen_mask = PILImg.new("RGB", mask_pil.size, (0, 0, 0))
+                pixels = mask_pil.load()
+                qw_pixels = qwen_mask.load()
+                w, h = mask_pil.size
+                for y in range(h):
+                    for x in range(w):
+                        if pixels[x, y][3] < 250:  # transparent = edit area
+                            qw_pixels[x, y] = (255, 255, 255)  # white for Qwen
+                        # else keep black (keep area)
+                mask_buf = io.BytesIO()
+                qwen_mask.save(mask_buf, format="PNG")
+                qwen_mask_b64 = b64mod.b64encode(mask_buf.getvalue()).decode("utf-8")
+            except Exception:
+                qwen_mask_b64 = ""
+        else:
+            qwen_mask_b64 = ""
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": "qwen-image-2.0",
+            "input": {
+                "prompt": prompt,
+                "image": data_uri,
+            },
+            "parameters": {"size": "1024x1024"},
+        }
+        if qwen_mask_b64:
+            body["input"]["mask"] = f"data:image/png;base64,{qwen_mask_b64}"
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(IMAGE_MODEL_ENDPOINTS.get("Qwen-Image 2", ""), json=body, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results = data.get("output", {}).get("results", [])
+                    if results and results[0].get("image"):
+                        b64 = results[0]["image"]
+                        if not b64.startswith("data:"):
+                            b64 = f"data:image/png;base64,{b64}"
+                        return {"success": True, "data": {"data_uri": b64}}
+                detail = ""
+                try: detail = resp.text[:300]
+                except: pass
+                return {"success": False, "message": f"修改失败 (HTTP {resp.status_code}) {detail}".strip()}
+        except Exception as e:
+            return {"success": False, "message": f"请求异常: {str(e)}"}
+
+    return {"success": False, "message": f"{model_name} 修改功能暂未实现"}

@@ -18,6 +18,7 @@ const emit2 = defineEmits<{
 // === 生图模型列表 ===
 const imageModels = [
   { name: 'GPT-Image 2', type: 'cloud' },
+  { name: 'Qwen-Image 2', type: 'cloud' },
   { name: 'Midjourney', type: 'cloud' },
   { name: 'Google Banana', type: 'cloud' },
   { name: '豆包Seedream', type: 'cloud' },
