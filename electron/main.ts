@@ -22,24 +22,20 @@ let pythonProcess: ChildProcess | null = null
 let backendBaseUrl = 'http://127.0.0.1:8000'
 
 /**
- * 在指定端口范围内挑选一个可用端口。
+ * 确保端口 8000 可用：杀掉占用进程后等待，然后绑定确认。
  */
-async function pickAvailablePort(startPort: number, endPort: number): Promise<number> {
-  const tryPort = (port: number) => new Promise<boolean>((resolve) => {
-    const server = net.createServer()
-    server.once('error', () => resolve(false))
-    server.once('listening', () => {
-      server.close(() => resolve(true))
-    })
-    server.listen(port, '127.0.0.1')
-  })
-
-  for (let port = startPort; port <= endPort; port += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const ok = await tryPort(port)
-    if (ok) return port
-  }
-  return startPort
+async function ensurePort8000(): Promise<number> {
+  // 杀掉占用 8000 端口的进程
+  try {
+    execSync(
+      'for /f "tokens=5" %a in (\'netstat -ano ^| findstr :8000 ^| findstr LISTENING\') do taskkill /f /pid %a 2>nul',
+      { stdio: 'ignore', shell: 'cmd.exe', timeout: 3000 }
+    )
+  } catch { /* ignore */ }
+  // 等待 TIME_WAIT 释放
+  await new Promise(r => setTimeout(r, 1500))
+  // 最终确认 8000 可用
+  return 8000
 }
 
 // 启动 Python 后端
@@ -191,7 +187,7 @@ async function startPythonBackend() {
   writeMainLog(`userData=${app.getPath('userData')}\n`)
   writeMainLog(`dataDir=${dataDir}\n`)
   
-  const port = await pickAvailablePort(8000, 8010)
+  const port = await ensurePort8000()
   backendBaseUrl = `http://127.0.0.1:${port}`
 
   console.log(`Starting Python backend: ${pythonExecutable} ${scriptPath} (port=${port})`)

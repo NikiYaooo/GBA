@@ -25,14 +25,6 @@ export function useBackend() {
         setApiBaseUrl(apiBaseUrl.value)
         return true
       } catch {
-        if (i % 4 === 0) {
-          const found = await scanAllPorts()
-          if (found) {
-            connected.value = true
-            statusText.value = `后端服务已连接（${apiBaseUrl.value}）`
-            return true
-          }
-        }
         statusText.value = `后端服务连接中...（重试 ${i}/${max}）`
         await new Promise(r => setTimeout(r, 2000))
       }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Database, FileText, Pen, Folder } from 'lucide-vue-next'
+import { Database, FileText, Pen, Folder, FolderOpen } from 'lucide-vue-next'
 import { ElMessageBox } from 'element-plus'
 import type { KBProject, KBFolder, KBDocumentV2, KBStats, KBBackup, KBSearchResult } from '@/types'
 
@@ -70,6 +70,11 @@ const searchQuery = ref('')
 const currentProjectName = computed(() => {
   const p = props.projects.find(p => p.id === props.activeProjectId)
   return p ? p.name : ''
+})
+
+const activeFolderName = computed(() => {
+  const f = props.folders.find(f => f.id === activeFolder.value)
+  return f ? f.name : ''
 })
 
 watch(() => props.activeProjectId, () => {
@@ -204,19 +209,19 @@ const onOpen = () => {
 
       <!-- Right: Content area -->
       <div class="kb-content" style="flex: 1; min-width: 0;">
-        <!-- Folder tabs -->
-        <div class="flex items-center justify-between mb-3">
-          <el-tabs v-model="activeFolder" @tab-change="onFolderChange">
-            <el-tab-pane label="全部" name="" />
-            <el-tab-pane
-              v-for="f in folders" :key="f.id"
-              :label="f.name" :name="f.id"
-              @contextmenu.prevent="onFolderContextMenu($event, f)"
-            />
-          </el-tabs>
-          <div class="flex gap-1">
-            <el-button size="small" @click="onNewFolder">+ 文件夹</el-button>
-          </div>
+        <!-- Breadcrumb + new folder button -->
+        <div class="flex items-center gap-2 mb-3">
+          <span
+            class="text-sm font-medium cursor-pointer"
+            :class="!activeFolder ? 'text-primary' : 'text-app-muted hover:text-primary'"
+            @click="activeFolder=''; onFolderChange('')"
+          >全部文档</span>
+          <template v-if="activeFolder">
+            <span class="text-app-muted text-xs">/</span>
+            <span class="text-sm font-medium text-primary">{{ activeFolderName }}</span>
+          </template>
+          <div class="flex-1" />
+          <el-button size="small" @click="onNewFolder">+ 文件夹</el-button>
         </div>
 
         <!-- Search bar -->
@@ -253,23 +258,33 @@ const onOpen = () => {
           </el-button>
         </div>
 
-        <!-- Folder list (clickable to switch tab) -->
-        <div v-if="folders.length > 0" class="flex flex-wrap gap-2 mb-3">
-          <div
-            v-for="f in folders"
-            :key="f.id"
-            class="flex items-center gap-1 px-3 py-1.5 rounded-md cursor-pointer text-xs border"
-            :class="activeFolder === f.id ? 'bg-primary-light text-primary border-primary' : 'hover:bg-app-hover'"
-            @click="activeFolder = f.id; onFolderChange(f.id)"
-            @contextmenu.prevent="onFolderContextMenu($event, f)"
-          >
-            <Folder class="w-3.5 h-3.5" />
-            {{ f.name }}
-          </div>
-        </div>
-
-        <!-- Document list -->
+        <!-- Folder + Document list -->
         <div class="max-h-[300px] overflow-y-auto">
+          <!-- Back to root when inside a folder -->
+          <div
+            v-if="activeFolder"
+            class="flex items-center gap-3 p-2 border-b text-sm hover:bg-app-hover cursor-pointer"
+            @click="activeFolder=''; onFolderChange('')"
+          >
+            <FolderOpen class="w-4 h-4 text-app-muted shrink-0" />
+            <span class="text-app-muted">.. 返回上级</span>
+          </div>
+
+          <!-- Folder items (only visible at root level) -->
+          <template v-if="!activeFolder">
+            <div
+              v-for="f in folders" :key="f.id"
+              class="flex items-center gap-3 p-2 border-b text-sm hover:bg-app-hover cursor-pointer"
+              @click="onFolderChange(f.id); activeFolder = f.id"
+              @contextmenu.prevent="onFolderContextMenu($event, f)"
+            >
+              <Folder class="w-4 h-4 text-yellow-500 shrink-0" />
+              <span class="flex-1 truncate">{{ f.name }}</span>
+              <span class="text-xs text-app-muted">文件夹</span>
+            </div>
+          </template>
+
+          <!-- Document items -->
           <div
             v-for="doc in documents" :key="doc.id"
             class="flex items-center gap-3 p-2 border-b text-sm hover:bg-app-hover"
@@ -278,18 +293,21 @@ const onOpen = () => {
             <span class="flex-1 truncate">{{ doc.filename }}</span>
             <el-tooltip v-if="doc.note" :content="doc.note" placement="top">
               <el-icon class="cursor-pointer text-app-primary" @click="emit('openNoteDialog', doc.id)">
-                <EditPen />
+                <Pen />
               </el-icon>
             </el-tooltip>
             <el-icon v-else class="cursor-pointer text-app-muted" @click="emit('openNoteDialog', doc.id)">
-              <EditPen />
+              <Pen />
             </el-icon>
             <span class="text-xs text-app-muted">{{ doc.chunk_count || 0 }} 块</span>
             <span class="text-xs text-app-muted">{{ formatSize(doc.file_size) }}</span>
             <el-button link size="small" type="danger" @click="emit('deleteDocument', doc.id)">删除</el-button>
           </div>
-          <div v-if="documents.length === 0" class="text-center py-8 text-app-muted text-sm">
+          <div v-if="!activeFolder && folders.length === 0 && documents.length === 0" class="text-center py-8 text-app-muted text-sm">
             暂无文档
+          </div>
+          <div v-if="activeFolder && documents.length === 0" class="text-center py-8 text-app-muted text-sm">
+            此文件夹为空
           </div>
         </div>
       </div>
