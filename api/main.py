@@ -17,6 +17,7 @@ import routers.mindmap as mindmap_router
 import routers.template as template_router
 import routers.reminders as reminders_router
 import routers.image_gen as image_gen_router
+import routers.image_library as image_library_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = get_app_data_dir()
@@ -76,6 +77,7 @@ app.include_router(mindmap_router.router)
 app.include_router(template_router.router)
 app.include_router(reminders_router.router)
 app.include_router(image_gen_router.router)
+app.include_router(image_library_router.router)
 
 
 @app.get("/")

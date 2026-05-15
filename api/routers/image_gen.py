@@ -372,6 +372,19 @@ async def edit_image(payload: dict = Body(...)):
                     files=files,
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
+                # 如果 edits 端点不存在（404），回退到 generation
+                if resp.status_code == 404:
+                    gen_body = {
+                        "model": cfg.get("modelId", "seedream-2-0"),
+                        "prompt": f"{prompt}（修改图片，基于原图进行修改）",
+                        "n": 1,
+                        "size": "1920x1920",
+                    }
+                    resp = await client.post(
+                        "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+                        json=gen_body,
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    )
                 if resp.status_code == 200:
                     data = resp.json()
                     b64 = data.get("data", [{}])[0].get("b64_json", "") or ""

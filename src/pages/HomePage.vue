@@ -38,6 +38,7 @@ import { useTools } from '@/composables/useTools'
 import { useSettings } from '@/composables/useSettings'
 import { useTheme } from '@/composables/useTheme'
 import { usePrompts } from '@/composables/usePrompts'
+import { useImageLibrary } from '@/composables/useImageLibrary'
 
 // 已通知的提醒 ID 集合（防止重复弹窗）
 const notifiedReminderIds = new Set<string>()
@@ -92,6 +93,7 @@ const categories: CategoryDef[] = [
   { id: 'imitation', label: '仿写库', icon: 'Sparkles' },
   { id: 'excel', label: '配置表', icon: 'TableIcon' },
   { id: 'draft', label: '草稿', icon: 'FileEdit' },
+  { id: 'image', label: '图片', icon: 'Image' },
 ]
 
 const backend = useBackend()
@@ -103,6 +105,7 @@ const tools = useTools()
 const settings = useSettings(ai.models)
 const theme = useTheme()
 const prompts = usePrompts()
+const imageLib = useImageLibrary()
 
 // --- Draft state ---
 const showNewDraftDialog = ref(false)
@@ -147,6 +150,44 @@ const excelCellBlur = (e: KeyboardEvent) => (e.target as HTMLElement)?.blur()
 
 const showCtxMenu = (e: MouseEvent, doc: DocRecord) => {
   ctxMenu.value = { visible: true, x: e.clientX, y: e.clientY, doc }
+}
+
+// --- Image library context menu ---
+const imgCtxMenu = ref({ visible: false, x: 0, y: 0, image: null as any })
+const closeImgCtxMenu = () => { imgCtxMenu.value.visible = false }
+const showImgCtxMenu = (e: MouseEvent, img: any) => {
+  imgCtxMenu.value = { visible: true, x: e.clientX, y: e.clientY, image: img }
+}
+const libraryEditImageUri = ref('')
+
+const handleImageCommand = async (command: string, img: any) => {
+  closeImgCtxMenu()
+  if (command === 'saveAs') {
+    const api = (window as any).electronAPI
+    if (api?.saveFileAs) {
+      const dataUri = await imageLib.getImageData(img.id)
+      if (dataUri) await api.saveFileAs(dataUri, img.name || 'image.png')
+      else ElMessage.warning('获取图片失败')
+    } else {
+      const a = document.createElement('a')
+      const dataUri = await imageLib.getImageData(img.id)
+      if (dataUri) { a.href = dataUri; a.download = img.name || 'image.png'; a.click() }
+    }
+  } else if (command === 'delete') {
+    await ElMessageBox.confirm(`确定删除图片「${img.name}」吗？`, '提示', { type: 'warning' })
+    await imageLib.deleteImage(img.id)
+  } else if (command === 'rename') {
+    const { value: newName } = await ElMessageBox.prompt('请输入新名称', '重命名', { inputValue: img.name })
+    if (newName) await imageLib.renameImage(img.id, newName.trim())
+  } else if (command === 'edit') {
+    const dataUri = await imageLib.getImageData(img.id)
+    if (dataUri) {
+      libraryEditImageUri.value = dataUri
+      showImageToolDialog.value = true
+    } else {
+      ElMessage.warning('获取图片失败')
+    }
+  }
 }
 
 // --- Editor dirty / auto-save ---
@@ -278,7 +319,11 @@ const switchCategory = async (catId: string) => {
   docs.currentDoc.value = { id: '', name: '未选择文档', content: '', type: '', path: '', category: '' }
   ai.aiResult.value = ''
   excel.reset()
-  await docs.loadDocuments(catId)
+  if (catId === 'image') {
+    await imageLib.loadImages()
+  } else {
+    await docs.loadDocuments(catId)
+  }
 }
 
 const selectDoc = async (doc: DocRecord) => {
@@ -617,49 +662,77 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
 <template>
   <div class="flex h-screen bg-app overflow-hidden font-sans text-app">
     <!-- Left Sidebar -->
-    <div class="w-64 border-r border-app bg-surface flex flex-col shrink-0">
+    <div class="w-80 border-r border-app bg-surface flex flex-col shrink-0">
       <div class="p-4 border-b border-app-light">
         <div class="flex items-center gap-1 mb-3">
           <h2 class="font-bold text-lg flex items-center gap-2 flex-1"><FolderOpen class="w-5 h-5 text-app-primary" />文档</h2>
-          <el-button type="primary" size="small" plain @click="handleUpload"><template #icon><Upload class="w-4 h-4" /></template>上传</el-button>
-          <el-button link @click="kb.openKB()"><Database class="w-4 h-4 text-app-muted" /></el-button>
+          <el-button v-if="activeCategory !== 'image'" type="primary" size="small" plain @click="handleUpload"><template #icon><Upload class="w-4 h-4" /></template>上传</el-button>
+          <el-button v-if="activeCategory !== 'image'" link @click="kb.openKB()"><Database class="w-4 h-4 text-app-muted" /></el-button>
           <el-button link @click="openSettings"><Settings class="w-4 h-4 text-app-muted" /></el-button>
         </div>
-        <el-input v-model="docs.searchQuery.value" placeholder="搜索..." :prefix-icon="Search" size="small" clearable />
+        <el-input v-if="activeCategory !== 'image'" v-model="docs.searchQuery.value" placeholder="搜索..." :prefix-icon="Search" size="small" clearable />
       </div>
-      <div class="px-2 pt-2 pb-2 flex-1 overflow-y-auto" @click="closeCtxMenu">
+      <div class="px-2 pt-2 pb-2 flex-1 overflow-y-auto" @click="closeCtxMenu(), closeImgCtxMenu()">
         <div class="flex gap-1 mb-3 border-b border-app-light pb-2">
           <button
             v-for="cat in categories" :key="cat.id" @click="switchCategory(cat.id)"
             :class="['flex-1 text-xs font-medium py-1.5 px-1 rounded transition-colors', activeCategory === cat.id ? 'bg-primary-light text-app-primary' : 'text-app-muted hover:text-app-secondary']"
           >{{ cat.label }}</button>
         </div>
-        <div v-if="activeCategory === 'draft'" class="mb-2">
-          <el-button size="small" plain class="w-full text-xs" @click="showNewDraftDialog = true">+ 新建草稿</el-button>
-        </div>
-        <div class="space-y-0.5">
-          <div
-            v-for="doc in docs.filteredDocList.value" :key="doc.id"
-            @click="selectDoc(doc)"
-            @contextmenu.prevent.stop="showCtxMenu($event, doc)"
-            :class="['flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors text-sm w-full', docs.currentDoc.value.id === doc.id ? 'bg-primary-light text-app-primary' : 'hover:bg-app-hover text-app-secondary']"
-          >
-            <span class="w-4 h-4 shrink-0 flex items-center justify-center">
-              <template v-if="(doc.category||'doc')==='imitation'"><Sparkles class="w-3.5 h-3.5 text-purple-500" /></template>
-              <template v-else-if="(doc.category||'doc')==='excel'"><TableIcon class="w-3.5 h-3.5 text-green-500" /></template>
-              <template v-else-if="(doc.category||'doc')==='draft'"><FileEdit class="w-3.5 h-3.5 text-orange-400" /></template>
-              <template v-else><FileText class="w-3.5 h-3.5 text-blue-500" /></template>
-            </span>
-            <span class="truncate flex-1 text-left">{{ doc.name }}</span>
+
+        <!-- 文档列表 -->
+        <template v-if="activeCategory !== 'image'">
+          <div v-if="activeCategory === 'draft'" class="mb-2">
+            <el-button size="small" plain class="w-full text-xs" @click="showNewDraftDialog = true">+ 新建草稿</el-button>
           </div>
-          <div v-if="docs.filteredDocList.value.length === 0" class="text-center text-app-muted py-6 text-sm">
-            {{ docs.searchQuery.value ? '无匹配文档' : (activeCategory === 'draft' ? '暂无草稿，点击上方新建' : '暂无文档') }}
+          <div class="space-y-0.5">
+            <div
+              v-for="doc in docs.filteredDocList.value" :key="doc.id"
+              @click="selectDoc(doc)"
+              @contextmenu.prevent.stop="showCtxMenu($event, doc)"
+              :class="['flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors text-sm w-full', docs.currentDoc.value.id === doc.id ? 'bg-primary-light text-app-primary' : 'hover:bg-app-hover text-app-secondary']"
+            >
+              <span class="w-4 h-4 shrink-0 flex items-center justify-center">
+                <template v-if="(doc.category||'doc')==='imitation'"><Sparkles class="w-3.5 h-3.5 text-purple-500" /></template>
+                <template v-else-if="(doc.category||'doc')==='excel'"><TableIcon class="w-3.5 h-3.5 text-green-500" /></template>
+                <template v-else-if="(doc.category||'doc')==='draft'"><FileEdit class="w-3.5 h-3.5 text-orange-400" /></template>
+                <template v-else><FileText class="w-3.5 h-3.5 text-blue-500" /></template>
+              </span>
+              <span class="truncate flex-1 text-left">{{ doc.name }}</span>
+            </div>
+            <div v-if="docs.filteredDocList.value.length === 0" class="text-center text-app-muted py-6 text-sm">
+              {{ docs.searchQuery.value ? '无匹配文档' : (activeCategory === 'draft' ? '暂无草稿，点击上方新建' : '暂无文档') }}
+            </div>
           </div>
-        </div>
-        <!-- Context menu -->
+        </template>
+
+        <!-- 图片库 -->
+        <template v-else>
+          <div class="mb-2">
+            <el-button size="small" plain class="w-full text-xs" @click="showImageToolDialog = true; libraryEditImageUri = ''">
+              <Image class="w-3.5 h-3.5 mr-1" />打开图片工具
+            </el-button>
+          </div>
+          <div class="space-y-1">
+            <div
+              v-for="img in imageLib.images.value" :key="img.id"
+              @contextmenu.prevent.stop="showImgCtxMenu($event, img)"
+              class="flex items-center gap-2 p-1.5 rounded-md cursor-pointer transition-colors text-sm hover:bg-app-hover text-app-secondary"
+            >
+              <span class="w-8 h-8 shrink-0 rounded overflow-hidden bg-gray-100 flex items-center justify-center text-xs text-app-muted">
+                <Image class="w-4 h-4" />
+              </span>
+              <span class="truncate flex-1 text-left">{{ img.name }}</span>
+            </div>
+            <div v-if="imageLib.images.value.length === 0" class="text-center text-app-muted py-6 text-sm">
+              暂无图片，使用图片工具生成后保存
+            </div>
+          </div>
+        </template>
+
+        <!-- Doc context menu -->
         <Teleport to="body">
-          <div
-            v-if="ctxMenu.visible"
+          <div v-if="ctxMenu.visible"
             class="fixed z-[9999] bg-surface rounded-lg shadow-xl border border-app py-1 min-w-[160px]"
             :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
             @click.stop
@@ -669,6 +742,21 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
             <button class="w-full px-3 py-2 text-sm text-left hover:bg-app-hover flex items-center gap-2" @click="handleDocCommand('rename', ctxMenu.doc!)"><FileEdit class="w-3.5 h-3.5 text-orange-500" />重命名</button>
             <div class="border-t border-app-light my-1" />
             <button class="w-full px-3 py-2 text-sm text-left text-red-500 hover:bg-red-50 flex items-center gap-2" @click="handleDocCommand('delete', ctxMenu.doc!)"><Trash2 class="w-3.5 h-3.5" />删除文档</button>
+          </div>
+        </Teleport>
+
+        <!-- Image context menu -->
+        <Teleport to="body">
+          <div v-if="imgCtxMenu.visible"
+            class="fixed z-[9999] bg-surface rounded-lg shadow-xl border border-app py-1 min-w-[160px]"
+            :style="{ left: imgCtxMenu.x + 'px', top: imgCtxMenu.y + 'px' }"
+            @click.stop
+          >
+            <button class="w-full px-3 py-2 text-sm text-left hover:bg-app-hover flex items-center gap-2" @click="handleImageCommand('saveAs', imgCtxMenu.image)"><Save class="w-3.5 h-3.5" />另存为...</button>
+            <button class="w-full px-3 py-2 text-sm text-left hover:bg-app-hover flex items-center gap-2" @click="handleImageCommand('edit', imgCtxMenu.image)"><FileEdit class="w-3.5 h-3.5 text-orange-500" />修改</button>
+            <button class="w-full px-3 py-2 text-sm text-left hover:bg-app-hover flex items-center gap-2" @click="handleImageCommand('rename', imgCtxMenu.image)"><FileEdit class="w-3.5 h-3.5" />重命名</button>
+            <div class="border-t border-app-light my-1" />
+            <button class="w-full px-3 py-2 text-sm text-left text-red-500 hover:bg-red-50 flex items-center gap-2" @click="handleImageCommand('delete', imgCtxMenu.image)"><Trash2 class="w-3.5 h-3.5" />删除</button>
           </div>
         </Teleport>
       </div>
@@ -918,7 +1006,11 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @submit="runImitateAndCreate"
     />
 
-    <ImageToolDialog v-model:visible="showImageToolDialog" />
+    <ImageToolDialog
+      v-model:visible="showImageToolDialog"
+      :library-image-data-uri="libraryEditImageUri"
+      @save-to-library="(uri: string) => { imageLib.saveImage(uri, '未命名图片'); libraryEditImageUri = '' }"
+    />
 
     <PromptDialog
       v-model:visible="prompts.showPromptDialog.value"

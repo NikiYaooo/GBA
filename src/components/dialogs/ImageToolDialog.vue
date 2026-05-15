@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { apiUrl, getErrMsg } from '@/utils/api'
 import { Save, Trash2, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 
 const visible = defineModel<boolean>('visible', { default: false })
+
+const props2 = defineProps<{
+  libraryImageDataUri?: string
+}>()
+
+const emit2 = defineEmits<{
+  saveToLibrary: [dataUri: string]
+}>()
 
 // === 生图模型列表 ===
 const imageModels = [
@@ -69,15 +77,21 @@ const enhancePrompt = async () => {
 
 // === 生图 ===
 const generate = async () => {
-  if (!enhancedPrompt.value.trim() && !rawPrompt.value.trim()) {
-    ElMessage.warning('请输入生图提示')
-    return
-  }
-  const prompt = enhancedPrompt.value || rawPrompt.value
+  const promptText = rawPrompt.value.trim()
+  if (!promptText) { ElMessage.warning('请输入生图提示'); return }
   isGenerating.value = true
   try {
+    // Auto-enhance prompt first
+    enhancedPrompt.value = ''
+    try {
+      const r = await axios.post(apiUrl('/api/image/enhance-prompt'), { text: promptText })
+      if (r.data.success && r.data.data?.enhanced) {
+        enhancedPrompt.value = r.data.data.enhanced
+      }
+    } catch { /* use raw prompt */ }
+    const finalPrompt = enhancedPrompt.value || promptText
     const r = await axios.post(apiUrl('/api/image/generate'), {
-      prompt,
+      prompt: finalPrompt,
       model: selectedModel.value,
     })
     if (r.data.success && r.data.data?.data_uri) {
@@ -201,11 +215,26 @@ const drawBrush = (e: MouseEvent) => {
   const y = (e.clientY - rect.top) * scaleY
 
   editCtx.globalCompositeOperation = 'source-over'
-  editCtx.fillStyle = 'rgba(255, 0, 0, 0.6)'
+  editCtx.fillStyle = 'rgba(255, 0, 0, 0.4)'
   editCtx.beginPath()
   editCtx.arc(x, y, brushSize.value, 0, Math.PI * 2)
   editCtx.fill()
 }
+
+// Watch for library edit: load image and enter modify mode
+watch(() => props2.libraryImageDataUri, (uri) => {
+  if (uri && visible.value) {
+    images.value = [{ data_uri: uri, revised_prompt: '' }]
+    currentIndex.value = 0
+    nextTick(() => enterModifyMode())
+  }
+})
+watch(visible, (v) => {
+  if (!v) {
+    isModifyMode.value = false
+    enhancedPrompt.value = ''
+  }
+})
 
 const clearMask = () => {
   if (!editCtx || !editCanvasRef.value) return
@@ -271,22 +300,18 @@ const submitEdit = async () => {
             <el-tag v-else size="small" type="primary" class="ml-2">云端</el-tag>
           </el-option>
         </el-select>
-        <div class="flex-1 flex gap-2">
+        <div class="flex-1 flex flex-col gap-2">
           <el-input
             v-model="rawPrompt"
+            type="textarea" :rows="3"
             size="small"
-            placeholder="输入自然语言描述，AI将优化为专业prompt..."
-            clearable
-            @keyup.enter="generate"
+            placeholder="输入自然语言描述，AI将自动优化为专业prompt..."
+            @keyup.ctrl.enter="generate"
           />
-          <el-button size="small" :loading="isEnhancing" @click="enhancePrompt">优化提示</el-button>
-          <el-button size="small" type="primary" :loading="isGenerating" @click="generate">生图</el-button>
+          <div class="flex justify-end">
+            <el-button size="small" type="primary" :loading="isGenerating" @click="generate">生图</el-button>
+          </div>
         </div>
-      </div>
-
-      <!-- Enhanced prompt display -->
-      <div v-if="enhancedPrompt" class="text-xs text-app-muted bg-gray-50 dark:bg-gray-800 rounded p-2 leading-relaxed">
-        <span class="font-medium">优化后 prompt：</span>{{ enhancedPrompt }}
       </div>
 
       <!-- Main content: image area or modify mode -->
@@ -316,7 +341,10 @@ const submitEdit = async () => {
         <!-- Action buttons -->
         <div v-if="images.length > 0" class="flex gap-2">
           <el-button size="small" @click="saveImage">
-            <Save class="w-3.5 h-3.5 mr-1" />保存
+            <Save class="w-3.5 h-3.5 mr-1" />导出
+          </el-button>
+          <el-button size="small" type="success" @click="emit2('saveToLibrary', currentImage?.data_uri || '')">
+            <Save class="w-3.5 h-3.5 mr-1" />保存到图片库
           </el-button>
           <el-button size="small" type="primary" @click="enterModifyMode">
             修改
