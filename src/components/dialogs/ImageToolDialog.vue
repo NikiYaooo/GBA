@@ -41,6 +41,9 @@ const currentImage = computed(() => images.value[currentIndex.value] || null)
 const hasPrev = computed(() => currentIndex.value > 0)
 const hasNext = computed(() => currentIndex.value < images.value.length - 1)
 
+// Track library edit mode: images loaded from library are kept when "清空" is clicked
+const libraryImageData = ref<ImageItem | null>(null)
+
 // === 修改模式 ===
 const isModifyMode = ref(false)
 const modifyPrompt = ref('')
@@ -223,16 +226,21 @@ const drawBrush = (e: MouseEvent) => {
 
 // Watch for library edit: load image and enter modify mode
 watch(() => props2.libraryImageDataUri, (uri) => {
-  if (uri && visible.value) {
-    images.value = [{ data_uri: uri, revised_prompt: '' }]
+  if (uri) {
+    const libImg: ImageItem = { data_uri: uri, revised_prompt: '' }
+    images.value = [libImg]
+    libraryImageData.value = libImg
     currentIndex.value = 0
-    nextTick(() => enterModifyMode())
+    if (visible.value) {
+      nextTick(() => enterModifyMode())
+    }
   }
 })
 watch(visible, (v) => {
   if (!v) {
     isModifyMode.value = false
     enhancedPrompt.value = ''
+    libraryImageData.value = null
   }
 })
 
@@ -313,8 +321,8 @@ const submitEdit = async () => {
   >
     <div class="space-y-4">
       <!-- Model selector + prompt -->
-      <div class="flex gap-2 items-start">
-        <el-select v-model="selectedModel" size="small" class="!w-44" placeholder="选择生图模型">
+      <div class="flex gap-2 items-center">
+        <el-select v-model="selectedModel" size="small" class="!w-36" placeholder="选择生图模型">
           <el-option
             v-for="m in imageModels"
             :key="m.name"
@@ -326,18 +334,14 @@ const submitEdit = async () => {
             <el-tag v-else size="small" type="primary" class="ml-2">云端</el-tag>
           </el-option>
         </el-select>
-        <div class="flex-1 flex flex-col gap-2">
-          <el-input
-            v-model="rawPrompt"
-            type="textarea" :rows="3"
-            size="small"
-            placeholder="输入自然语言描述，AI将自动优化为专业prompt..."
-            @keyup.ctrl.enter="generate"
-          />
-          <div class="flex justify-end">
-            <el-button size="small" type="primary" :loading="isGenerating" @click="generate">生图</el-button>
-          </div>
-        </div>
+        <el-input
+          v-model="rawPrompt"
+          size="small"
+          placeholder="输入自然语言描述，AI将自动优化..."
+          class="flex-1"
+          @keyup.ctrl.enter="generate"
+        />
+        <el-button size="small" type="primary" :loading="isGenerating" @click="generate">生图</el-button>
       </div>
 
       <!-- Main content: image area or modify mode -->
@@ -375,8 +379,11 @@ const submitEdit = async () => {
           <el-button size="small" type="primary" @click="enterModifyMode">
             修改
           </el-button>
-          <el-button size="small" type="danger" @click="images = []; currentIndex = 0">
+          <el-button v-if="!libraryImageData" size="small" type="danger" @click="images = []; currentIndex = 0; isModifyMode = false">
             <Trash2 class="w-3.5 h-3.5 mr-1" />清空
+          </el-button>
+          <el-button v-else size="small" type="danger" @click="images = [libraryImageData]; currentIndex = 0; exitModifyMode()">
+            <Trash2 class="w-3.5 h-3.5 mr-1" />返回
           </el-button>
         </div>
 

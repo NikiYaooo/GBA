@@ -310,8 +310,18 @@ async def edit_image(payload: dict = Body(...)):
             async with httpx.AsyncClient(timeout=180) as client:
                 if mask_uri:
                     import base64 as b64mod
+                    from PIL import Image as PILImage2
+                    import io
                     img_bytes = b64mod.b64decode(body.pop("image"))
                     mask_bytes = b64mod.b64decode(body.pop("mask"))
+                    # Resize mask to match original image dimensions
+                    img_pil = PILImage2.open(io.BytesIO(img_bytes))
+                    mask_pil = PILImage2.open(io.BytesIO(mask_bytes)).convert("RGBA")
+                    if mask_pil.size != img_pil.size:
+                        mask_pil = mask_pil.resize(img_pil.size, PILImage2.NEAREST)
+                    mask_buf = io.BytesIO()
+                    mask_pil.save(mask_buf, format="PNG")
+                    mask_bytes = mask_buf.getvalue()
                     files = {
                         "image": ("image.png", img_bytes, "image/png"),
                         "mask": ("mask.png", mask_bytes, "image/png"),
@@ -372,55 +382,9 @@ async def edit_image(payload: dict = Body(...)):
                     files=files,
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
-                # 如果 edits 端点不存在（404），回退到 generation
+                # 如果 edits 端点不存在（404），说明该模型不支持局部修改
                 if resp.status_code == 404:
-                    # 分析 mask 确定涂抹区域的位置和范围
-                    region_desc = "指定区域"
-                    if mask_uri:
-                        try:
-                            from PIL import Image as PILImage
-                            import io
-                            m_bytes = b64mod.b64decode(mask_b64)
-                            m_img = PILImage.open(io.BytesIO(m_bytes)).convert("RGBA")
-                            m_w, m_h = m_img.size
-                            m_pixels = m_img.load()
-                            # Find bounding box of transparent pixels (edit area)
-                            min_x, min_y = m_w, m_h
-                            max_x, max_y = 0, 0
-                            for y in range(m_h):
-                                for x in range(m_w):
-                                    if m_pixels[x, y][3] < 250:  # transparent = edit
-                                        min_x = min(min_x, x)
-                                        min_y = min(min_y, y)
-                                        max_x = max(max_x, x)
-                                        max_y = max(max_y, y)
-                            if max_x > min_x and max_y > min_y:
-                                cx = (min_x + max_x) / 2 / m_w
-                                cy = (min_y + max_y) / 2 / m_h
-                                # Position description
-                                vpos = "顶部" if cy < 0.33 else "底部" if cy > 0.67 else "中间"
-                                hpos = "左侧" if cx < 0.33 else "右侧" if cx > 0.67 else "中间"
-                                pos_parts = []
-                                if vpos != "中间": pos_parts.append(vpos)
-                                if hpos != "中间": pos_parts.append(hpos)
-                                if not pos_parts: pos_parts.append("正中央")
-                                area_ratio = ((max_x - min_x) * (max_y - min_y)) / (m_w * m_h)
-                                size_desc = "小部分" if area_ratio < 0.15 else "约一半" if area_ratio < 0.4 else "大部分"
-                                region_desc = f"图片的{'的'.join(pos_parts)}{size_desc}区域"
-                        except Exception:
-                            pass
-                    gen_prompt = f"对{region_desc}进行修改：{prompt}。请保持图片其他所有内容与原始图片完全一致，只修改{region_desc}。"
-                    gen_body = {
-                        "model": cfg.get("modelId", "seedream-2-0"),
-                        "prompt": gen_prompt,
-                        "n": 1,
-                        "size": "1920x1920",
-                    }
-                    resp = await client.post(
-                        "https://ark.cn-beijing.volces.com/api/v3/images/generations",
-                        json=gen_body,
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    )
+                    return {"success": False, "message": "豆包Seedream 不支持局部修改功能。请使用 GPT-Image 2（DALL-E）进行涂抹修改"}
                 if resp.status_code == 200:
                     data = resp.json()
                     b64 = data.get("data", [{}])[0].get("b64_json", "") or ""

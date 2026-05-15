@@ -182,11 +182,19 @@ const handleImageCommand = async (command: string, img: any) => {
   } else if (command === 'edit') {
     const dataUri = await imageLib.getImageData(img.id)
     if (dataUri) {
-      libraryEditImageUri.value = dataUri
       showImageToolDialog.value = true
+      libraryEditImageUri.value = dataUri
     } else {
       ElMessage.warning('获取图片失败')
     }
+  }
+}
+
+const handleImageClick = async (img: any) => {
+  const dataUri = await imageLib.getImageData(img.id)
+  if (dataUri) {
+    showImageToolDialog.value = true
+    libraryEditImageUri.value = dataUri
   }
 }
 
@@ -716,6 +724,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
           <div class="space-y-1">
             <div
               v-for="img in imageLib.images.value" :key="img.id"
+              @click="handleImageClick(img)"
               @contextmenu.prevent.stop="showImgCtxMenu($event, img)"
               class="flex items-center gap-2 p-1.5 rounded-md cursor-pointer transition-colors text-sm hover:bg-app-hover text-app-secondary"
             >
