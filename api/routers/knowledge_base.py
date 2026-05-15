@@ -423,6 +423,15 @@ async def restore_backup(project_id: str, payload: dict = Body(...)):
     return result
 
 
+@router.delete("/project/{project_id}/backup/{filename:path}")
+async def delete_backup(project_id: str, filename: str):
+    proj = get_kb().get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    ok = proj.delete_backup(filename)
+    return {"success": ok, "message": "已删除" if ok else "删除失败"}
+
+
 # ── 统计 ──────────────────────────────────────────────────
 
 @router.get("/project/{project_id}/stats")

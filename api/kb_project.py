@@ -868,6 +868,17 @@ class KBProject:
         except Exception as e:
             return {"success": False, "message": f"恢复失败: {e}"}
 
+    def delete_backup(self, filename: str) -> bool:
+        """删除指定备份文件。"""
+        backup_path = os.path.join(self.backups_dir, filename)
+        if not os.path.exists(backup_path):
+            return False
+        try:
+            os.remove(backup_path)
+            return True
+        except Exception:
+            return False
+
     # ------------------------------------------------------------------
     # 自定义词库
     # ------------------------------------------------------------------

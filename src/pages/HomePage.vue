@@ -76,6 +76,10 @@ import PromptDialog from '@/components/dialogs/PromptDialog.vue'
 import SettingsDialog from '@/components/dialogs/SettingsDialog.vue'
 import KBDialog from '@/components/dialogs/KBDialog.vue'
 import KBSearchPanel from '@/components/dialogs/KBSearchPanel.vue'
+import KBProjectDialog from '@/components/dialogs/KBProjectDialog.vue'
+import KBDocNoteDialog from '@/components/dialogs/KBDocNoteDialog.vue'
+import KBBackupDialog from '@/components/dialogs/KBBackupDialog.vue'
+import KBVocabDialog from '@/components/dialogs/KBVocabDialog.vue'
 import ToolsDialog from '@/components/dialogs/ToolsDialog.vue'
 import UIDialog from '@/components/dialogs/UIDialog.vue'
 
@@ -111,6 +115,14 @@ const showImitateDialog = ref(false)
 
 // KB 检索面板快捷键
 const showSearchPanel = ref(false)
+
+// KB 子对话框
+const showKBProjectDialog = ref(false)
+const showDocNoteDialog = ref(false)
+const editingDocId = ref('')
+const editingDocNote = ref('')
+const showBackupDialog = ref(false)
+const showVocabDialog = ref(false)
 const handleKeydown = (e: KeyboardEvent) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
     // 如果编辑器或输入框在焦点中，不拦截
@@ -518,8 +530,8 @@ const clearResult = async () => {
 }
 
 // --- KB handlers ---
-const handleKBUpload = async (file: File) => {
-  const ok = await kb.uploadFile(file)
+const handleKBUpload = async (file: File, folderId?: string) => {
+  const ok = await kb.uploadFile(file, folderId)
   if (ok) ElMessage.success('入库成功')
   else ElMessage.warning('入库失败')
 }
@@ -530,6 +542,18 @@ const handleKBDelete = async (docId: string) => {
     await kb.deleteDocument(docId)
     ElMessage.success('已删除')
   } catch { /* */ }
+}
+
+const handleOpenNoteDialog = (docId: string) => {
+  const doc = kb.documents.value.find(d => d.id === docId)
+  editingDocId.value = docId
+  editingDocNote.value = doc?.note || ''
+  showDocNoteDialog.value = true
+}
+
+const handleSaveNote = async (docId: string, note: string) => {
+  await kb.updateDocument(docId, { note })
+  showDocNoteDialog.value = false
 }
 
 // --- Tools handlers ---
@@ -982,6 +1006,10 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @load-vocab="kb.loadVocab"
       @add-vocab="kb.addVocab"
       @remove-vocab="kb.removeVocab"
+      @open-project-dialog="showKBProjectDialog = true"
+      @open-note-dialog="handleOpenNoteDialog"
+      @open-backup-dialog="showBackupDialog = true"
+      @open-vocab-dialog="showVocabDialog = true"
     />
 
     <KBSearchPanel
@@ -993,6 +1021,38 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :search-loading="kb.searchLoading.value"
       @search="kb.search"
       @fuzzy-search="kb.fuzzySearch"
+    />
+
+    <KBProjectDialog
+      v-model:visible="showKBProjectDialog"
+      :loading="kb.loading.value"
+      @create-project="async (name, description, model) => { await kb.createProject(name, description, model); showKBProjectDialog = false }"
+    />
+
+    <KBDocNoteDialog
+      v-model:visible="showDocNoteDialog"
+      :doc-id="editingDocId"
+      :current-note="editingDocNote"
+      @save="handleSaveNote"
+    />
+
+    <KBBackupDialog
+      v-model:visible="showBackupDialog"
+      :backups="kb.backups.value"
+      :loading="kb.loading.value"
+      @load-backups="kb.loadBackups"
+      @create-backup="kb.createBackup"
+      @restore-backup="kb.restoreBackup"
+      @delete-backup="kb.deleteBackup"
+    />
+
+    <KBVocabDialog
+      v-model:visible="showVocabDialog"
+      :vocab-list="kb.vocabList.value"
+      :loading="kb.loading.value"
+      @load-vocab="kb.loadVocab"
+      @add-vocab="kb.addVocab"
+      @remove-vocab="kb.removeVocab"
     />
 
     <ToolsDialog

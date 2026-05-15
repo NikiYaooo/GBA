@@ -126,11 +126,11 @@ const onProjectContextMenu = (e: MouseEvent, project: KBProject) => {
 
 const onFolderContextMenu = (e: MouseEvent, folder: KBFolder) => {
   e.preventDefault()
-  ElMessageBox.alert(
-    `文件夹: ${folder.name}\n创建时间: ${new Date(folder.created_at).toLocaleDateString()}`,
-    '文件夹信息',
-    { confirmButtonText: '关闭' }
-  )
+  ElMessageBox.confirm(
+    `确定删除文件夹 "${folder.name}"？文件夹内的文档不会被删除，仅取消分类。`,
+    '删除文件夹',
+    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+  ).then(() => emit('deleteFolder', folder.id)).catch(() => {})
 }
 
 const onOpen = () => {

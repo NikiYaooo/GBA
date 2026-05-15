@@ -250,6 +250,19 @@ export function useKnowledgeBase() {
     } catch { ElMessage.error('恢复备份失败'); return false }
   }
 
+  const deleteBackup = async (filename: string) => {
+    if (!activeProjectId.value) return false
+    try {
+      const r = await axios.delete(apiUrl(`/api/kb/project/${activeProjectId.value}/backup/${encodeURIComponent(filename)}`))
+      if (r.data.success) {
+        await loadBackups()
+        ElMessage.success('备份已删除')
+        return true
+      }
+      return false
+    } catch { return false }
+  }
+
   // ========== 自定义词库 ==========
 
   const loadVocab = async () => {
@@ -345,7 +358,7 @@ export function useKnowledgeBase() {
     search, fuzzySearch,
 
     // 备份
-    loadBackups, createBackup, restoreBackup,
+    loadBackups, createBackup, restoreBackup, deleteBackup,
 
     // 词库
     loadVocab, addVocab, removeVocab,
