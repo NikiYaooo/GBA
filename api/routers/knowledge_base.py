@@ -122,6 +122,32 @@ async def list_folders(project_id: str):
     return {"success": True, "data": {"folders": proj.folders}}
 
 
+@router.post("/scan-directory")
+async def scan_directory(payload: dict = Body(...)):
+    """扫描本地目录，返回受支持的文件列表及其相对路径（用于文件夹分类）。"""
+    directory = payload.get("path", "").strip()
+    if not directory or not os.path.isdir(directory):
+        raise HTTPException(status_code=400, detail="无效的目录路径")
+    files = []
+    for root, dirs, fnames in os.walk(directory):
+        for fname in sorted(fnames):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in SUPPORTED_EXTS:
+                full_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(full_path, directory)
+                # 取第一级子目录作为文件夹分类名
+                parts = rel_path.replace("\\", "/").split("/")
+                folder_name = parts[0] if len(parts) > 1 else ""
+                files.append({
+                    "filename": fname,
+                    "relative_path": rel_path.replace("\\", "/"),
+                    "folder_name": folder_name if folder_name != fname else "",
+                    "full_path": full_path,
+                    "size": os.path.getsize(full_path),
+                })
+    return {"success": True, "data": {"files": files}}
+
+
 # ── 文档管理 ──────────────────────────────────────────────
 
 @router.post("/project/{project_id}/upload")
@@ -211,6 +237,41 @@ async def upload_multiple(project_id: str, request: Request):
             if os.path.exists(file_path):
                 os.remove(file_path)
     return {"success": True, "data": {"results": results, "total": len(results)}}
+
+
+@router.post("/project/{project_id}/import-files")
+async def import_files(project_id: str, payload: dict = Body(...)):
+    """批量导入本地文件。files: [{path, folder_id?}]"""
+    proj = get_kb().get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    files = payload.get("files", [])
+    if not files:
+        raise HTTPException(status_code=400, detail="文件列表不能为空")
+    results = []
+    for item in files:
+        file_path = item.get("path", "")
+        folder_id = item.get("folder_id", "")
+        if not file_path or not os.path.isfile(file_path):
+            results.append({"filename": os.path.basename(file_path), "success": False, "message": "文件不存在"})
+            continue
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in SUPPORTED_EXTS:
+            continue
+        content = DocumentParser.parse(file_path)
+        if isinstance(content, str) and "解析错误" in content[:50]:
+            results.append({"filename": os.path.basename(file_path), "success": False, "message": content})
+            continue
+        safe_name = os.path.basename(file_path)
+        doc_type = ext.lstrip(".") or "unknown"
+        file_size = os.path.getsize(file_path)
+        result = proj.add_document(
+            file_path=file_path, filename=safe_name,
+            content=str(content), doc_type=doc_type,
+            file_size=file_size, folder_id=folder_id or None,
+        )
+        results.append({"filename": safe_name, **result})
+    return {"success": True, "data": {"results": results, "total": len(results), "succeeded": sum(1 for r in results if r.get("success"))}}
 
 
 @router.get("/project/{project_id}/documents")

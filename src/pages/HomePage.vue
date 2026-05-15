@@ -80,6 +80,8 @@ import KBProjectDialog from '@/components/dialogs/KBProjectDialog.vue'
 import KBDocNoteDialog from '@/components/dialogs/KBDocNoteDialog.vue'
 import KBBackupDialog from '@/components/dialogs/KBBackupDialog.vue'
 import KBVocabDialog from '@/components/dialogs/KBVocabDialog.vue'
+import KBChunkSizeDialog from '@/components/dialogs/KBChunkSizeDialog.vue'
+import KBBatchImportDialog from '@/components/dialogs/KBBatchImportDialog.vue'
 import ToolsDialog from '@/components/dialogs/ToolsDialog.vue'
 import UIDialog from '@/components/dialogs/UIDialog.vue'
 
@@ -123,6 +125,8 @@ const editingDocId = ref('')
 const editingDocNote = ref('')
 const showBackupDialog = ref(false)
 const showVocabDialog = ref(false)
+const showChunkSizeDialog = ref(false)
+const showBatchImportDialog = ref(false)
 const handleKeydown = (e: KeyboardEvent) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
     // 如果编辑器或输入框在焦点中，不拦截
@@ -554,6 +558,17 @@ const handleOpenNoteDialog = (docId: string) => {
 const handleSaveNote = async (docId: string, note: string) => {
   await kb.updateDocument(docId, { note })
   showDocNoteDialog.value = false
+}
+
+const handleBatchImport = async (files: { path: string; folderId?: string }[]) => {
+  const r = await axios.post(apiUrl(`/api/kb/project/${kb.activeProjectId.value}/import-files`), { files })
+  if (r.data.success) {
+    const d = r.data.data
+    ElMessage.success(`导入完成: ${d.succeeded || 0}/${d.total} 个成功`)
+    await Promise.all([kb.loadDocuments(), kb.loadStats()])
+  } else {
+    ElMessage.warning(r.data.message || '批量导入失败')
+  }
 }
 
 // --- Tools handlers ---
@@ -1010,6 +1025,9 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @open-note-dialog="handleOpenNoteDialog"
       @open-backup-dialog="showBackupDialog = true"
       @open-vocab-dialog="showVocabDialog = true"
+      @open-chunk-size-dialog="showChunkSizeDialog = true"
+      @open-batch-import-dialog="showBatchImportDialog = true"
+      @rename-project="kb.renameProject"
     />
 
     <KBSearchPanel
@@ -1053,6 +1071,22 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @load-vocab="kb.loadVocab"
       @add-vocab="kb.addVocab"
       @remove-vocab="kb.removeVocab"
+    />
+
+    <KBChunkSizeDialog
+      v-model:visible="showChunkSizeDialog"
+      :chunk-size-min="kb.chunkSizeMin.value"
+      :chunk-size-max="kb.chunkSizeMax.value"
+      :loading="kb.loading.value"
+      @save="kb.saveChunkSize"
+      @rechunk="kb.rechunk"
+    />
+
+    <KBBatchImportDialog
+      v-model:visible="showBatchImportDialog"
+      :active-project-id="kb.activeProjectId.value"
+      :folders="kb.folders.value"
+      @import-files="handleBatchImport"
     />
 
     <ToolsDialog

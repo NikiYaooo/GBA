@@ -27,6 +27,7 @@ const emit = defineEmits<{
   switchProject: [id: string]
   createProject: [name: string, description?: string, model?: string]
   deleteProject: [id: string]
+  renameProject: [id: string, name: string]
 
   // 文件夹
   loadFolders: []
@@ -60,6 +61,7 @@ const emit = defineEmits<{
   openBackupDialog: []
   openVocabDialog: []
   openChunkSizeDialog: []
+  openBatchImportDialog: []
 }>()
 
 const activeFolder = ref('')
@@ -115,22 +117,44 @@ const onUpload = () => {
   input.click()
 }
 
-const onProjectContextMenu = (e: MouseEvent, project: KBProject) => {
+const onProjectContextMenu = async (e: MouseEvent, project: KBProject) => {
   e.preventDefault()
-  ElMessageBox.alert(
-    `项目: ${project.name}\n描述: ${project.description || '无'}\n模型: ${project.embedding_model}\n切片: ${project.chunk_size_min}~${project.chunk_size_max}`,
-    '项目信息',
-    { confirmButtonText: '关闭' }
-  )
+  if (props.projects.length <= 1) {
+    ElMessageBox.alert('只有一个项目，无法删除', '提示', { confirmButtonText: '关闭' })
+    return
+  }
+  const action = await ElMessageBox.prompt(
+    `项目: ${project.name}\n模型: ${project.embedding_model}\n文档: ${project.doc_count || 0}\n\n输入 "delete" 确认删除此项目，或留空取消：`,
+    '项目操作',
+    { confirmButtonText: '删除', cancelButtonText: '取消', inputPlaceholder: '输入 delete 确认删除' }
+  ).then(({ value }) => value?.trim().toLowerCase() === 'delete' ? 'delete' : null)
+   .catch(() => null)
+  if (action === 'delete') {
+    emit('deleteProject', project.id)
+  }
 }
 
-const onFolderContextMenu = (e: MouseEvent, folder: KBFolder) => {
+const onFolderContextMenu = async (e: MouseEvent, folder: KBFolder) => {
   e.preventDefault()
-  ElMessageBox.confirm(
-    `确定删除文件夹 "${folder.name}"？文件夹内的文档不会被删除，仅取消分类。`,
-    '删除文件夹',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-  ).then(() => emit('deleteFolder', folder.id)).catch(() => {})
+  const action = await ElMessageBox.alert(
+    `文件夹: ${folder.name}`,
+    '文件夹操作',
+    { confirmButtonText: '关闭', showCancelButton: true, cancelButtonText: '重命名', showClose: false }
+  ).then(() => null).catch(() => 'rename' as const)
+
+  if (action === 'rename') {
+    const { value } = await ElMessageBox.prompt('请输入新名称', '重命名文件夹', { inputValue: folder.name })
+    if (value && value !== folder.name) emit('renameFolder', folder.id, value)
+  } else {
+    try {
+      await ElMessageBox.confirm(
+        `确定删除文件夹 "${folder.name}"？文档不会被删除，仅取消分类。`,
+        '删除文件夹',
+        { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+      )
+      emit('deleteFolder', folder.id)
+    } catch { /* cancelled */ }
+  }
 }
 
 const onOpen = () => {
@@ -192,7 +216,6 @@ const onOpen = () => {
           </el-tabs>
           <div class="flex gap-1">
             <el-button size="small" @click="onNewFolder">+ 文件夹</el-button>
-            <el-button size="small" @click="emit('openBackupDialog')">备份</el-button>
           </div>
         </div>
 
@@ -222,6 +245,9 @@ const onOpen = () => {
         <div class="flex gap-2 mb-3">
           <el-button size="small" type="primary" :loading="isUploadingKB" @click="onUpload">
             上传文档
+          </el-button>
+          <el-button size="small" @click="emit('openBatchImportDialog')">
+            批量导入
           </el-button>
           <el-button size="small" @click="emit('openChunkSizeDialog')">
             切片设置

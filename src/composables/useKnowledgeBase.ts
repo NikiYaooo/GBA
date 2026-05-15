@@ -74,6 +74,14 @@ export function useKnowledgeBase() {
     }
   }
 
+  const renameProject = async (id: string, name: string) => {
+    try {
+      const r = await axios.put(apiUrl(`/api/kb/project/${id}`), { name })
+      if (r.data.success) { await loadProjects(); return true }
+      return false
+    } catch { return false }
+  }
+
   const deleteProject = async (id: string) => {
     try {
       const r = await axios.delete(apiUrl(`/api/kb/project/${id}`))
@@ -335,8 +343,37 @@ export function useKnowledgeBase() {
   const stopImport = async () => { /* no-op */ }
   const resetFolderImport = () => { /* no-op */ }
   const stopPolling = () => { /* no-op */ }
-  const saveChunkSize = async () => { /* no-op */ }
-  const rechunk = async () => { /* no-op */ }
+  const saveChunkSize = async (_min: number, _max: number) => {
+    if (!activeProjectId.value) return false
+    try {
+      const r = await axios.put(apiUrl(`/api/kb/project/${activeProjectId.value}/config`), { chunk_size_min: _min, chunk_size_max: _max })
+      if (r.data.success) {
+        chunkSizeMin.value = _min
+        chunkSizeMax.value = _max
+        ElMessage.success('切片设置已保存')
+        return true
+      }
+      ElMessage.warning(r.data.message || '保存失败')
+      return false
+    } catch { ElMessage.error('保存失败'); return false }
+  }
+
+  const rechunk = async () => {
+    if (!activeProjectId.value) return false
+    try {
+      loading.value = true
+      const r = await axios.post(apiUrl(`/api/kb/project/${activeProjectId.value}/rechunk`))
+      if (r.data.success) {
+        await loadDocuments()
+        await loadStats()
+        ElMessage.success('重新切片完成')
+        return true
+      }
+      ElMessage.warning(r.data.message || '重新切片失败')
+      return false
+    } catch { ElMessage.error('重新切片失败'); return false }
+    finally { loading.value = false }
+  }
 
   return {
     // 状态
@@ -346,7 +383,7 @@ export function useKnowledgeBase() {
     chunkSizeMin, chunkSizeMax, loading, searchLoading,
 
     // 项目管理
-    loadProjects, createProject, deleteProject, switchProject,
+    loadProjects, createProject, renameProject, deleteProject, switchProject,
 
     // 文件夹
     loadFolders, createFolder, renameFolder, deleteFolder,
