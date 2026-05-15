@@ -282,30 +282,23 @@ async def edit_image(payload: dict = Body(...)):
     model_configs = config.get("models", {})
 
     if model_name == "GPT-Image 2":
-        cfg = model_configs.get("GPT", {})
+        cfg = model_configs.get("GPT-Image 2") or model_configs.get("GPT", {})
         api_key = cfg.get("apiKey", "")
         if not api_key:
             return {"success": False, "message": "GPT 未配置 API Key"}
 
-        # OpenAI doesn't support mask-based edits via API easily.
-        # We'll send the image + mask combined prompt as a text-guided edit
-        # Or use the newer DALL-E 3 edit endpoint
         body = {
-            "model": "dall-e-2",  # dall-e-2 supports image edits
+            "model": "dall-e-2",
             "prompt": prompt,
             "n": 1,
             "size": "1024x1024",
         }
 
-        # If we have a mask, convert and send as image + mask
         if mask_uri:
             import base64, io
             from PIL import Image
-
-            # Decode the mask, convert to black/white PNG
             header, b64data = data_uri.split(",", 1)
             mask_header, mask_b64 = mask_uri.split(",", 1)
-
             body["image"] = b64data
             body["mask"] = mask_b64
 
@@ -315,7 +308,6 @@ async def edit_image(payload: dict = Body(...)):
         }
         try:
             async with httpx.AsyncClient(timeout=180) as client:
-                # For DALL-E 2 edits, use multipart form
                 if mask_uri:
                     import base64 as b64mod
                     img_bytes = b64mod.b64decode(body.pop("image"))
@@ -354,4 +346,46 @@ async def edit_image(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
-    return {"success": False, "message": f"{model_name} 修改功能暂未实现"}
+    # 豆包Seedream 修改
+    if model_name == "豆包Seedream":
+        cfg = model_configs.get("豆包Seedream") or model_configs.get("豆包", {})
+        api_key = cfg.get("apiKey", "")
+        if not api_key:
+            return {"success": False, "message": "豆包Seedream 未配置 API Key"}
+        import base64 as b64mod
+        header, b64data = data_uri.split(",", 1)
+        img_bytes = b64mod.b64decode(b64data)
+        files = {
+            "image": ("image.png", img_bytes, "image/png"),
+            "prompt": (None, prompt),
+            "n": (None, "1"),
+            "size": (None, "1920x1920"),
+        }
+        if mask_uri:
+            mask_header, mask_b64 = mask_uri.split(",", 1)
+            mask_bytes = b64mod.b64decode(mask_b64)
+            files["mask"] = ("mask.png", mask_bytes, "image/png")
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(
+                    "https://ark.cn-beijing.volces.com/api/v3/images/edits",
+                    files=files,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    b64 = data.get("data", [{}])[0].get("b64_json", "") or ""
+                    if not b64:
+                        url = data.get("data", [{}])[0].get("url", "")
+                        if url:
+                            img_resp = await client.get(url, timeout=30)
+                            if img_resp.status_code == 200:
+                                b64 = b64mod.b64encode(img_resp.content).decode("utf-8")
+                    if b64:
+                        return {"success": True, "data": {"data_uri": f"data:image/png;base64,{b64}"}}
+                detail = ""
+                try: detail = resp.text[:200]
+                except: pass
+                return {"success": False, "message": f"修改失败 (HTTP {resp.status_code}) {detail}".strip()}
+        except Exception as e:
+            return {"success": False, "message": f"请求异常: {str(e)}"}

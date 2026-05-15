@@ -45,6 +45,8 @@ const editCanvasRef = ref<HTMLCanvasElement | null>(null)
 let ctx: CanvasRenderingContext2D | null = null
 let editCtx: CanvasRenderingContext2D | null = null
 let isDrawing = false
+const mousePos = ref({ x: -1, y: -1 })
+const canvasContainerStyle = ref({ height: '400px' })
 
 // === 提示词增强 ===
 const enhancePrompt = async () => {
@@ -134,46 +136,72 @@ const initCanvas = () => {
   if (!canvas || !currentImage.value) return
   const img = new Image()
   img.onload = () => {
-    canvas.width = Math.min(img.naturalWidth, 600)
-    canvas.height = Math.min(img.naturalHeight, 600)
+    const maxW = 700, maxH = 500
+    let w = img.naturalWidth, h = img.naturalHeight
+    if (w > maxW) { h = h * maxW / w; w = maxW }
+    if (h > maxH) { w = w * maxH / h; h = maxH }
+    w = Math.round(w); h = Math.round(h)
+
+    canvas.width = w
+    canvas.height = h
+    canvas.style.width = w + 'px'
+    canvas.style.height = h + 'px'
     ctx = canvas.getContext('2d')
-    if (ctx) {
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-    }
-    // Init overlay canvas
+    if (ctx) ctx.drawImage(img, 0, 0, w, h)
+
     const overlay = editCanvasRef.value
     if (overlay) {
-      overlay.width = canvas.width
-      overlay.height = canvas.height
+      overlay.width = w
+      overlay.height = h
+      overlay.style.width = w + 'px'
+      overlay.style.height = h + 'px'
       editCtx = overlay.getContext('2d')
     }
+
+    canvasContainerStyle.value = { height: h + 'px' }
   }
   img.src = currentImage.value.data_uri
 }
 
 // === Canvas: mouse events for drawing the mask ===
 const onMouseDown = (e: MouseEvent) => {
-  if (!editCtx) return
+  if (!editCtx || !editCanvasRef.value) return
   isDrawing = true
+  const rect = editCanvasRef.value.getBoundingClientRect()
+  const scaleX = editCanvasRef.value.width / rect.width
+  const scaleY = editCanvasRef.value.height / rect.height
+  mousePos.value = {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY,
+  }
   drawBrush(e)
 }
 
 const onMouseMove = (e: MouseEvent) => {
-  if (!isDrawing || !editCtx) return
-  drawBrush(e)
+  if (!editCanvasRef.value) return
+  const rect = editCanvasRef.value.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const y = e.clientY - rect.top
+  // Scale mouse coords to canvas coords if CSS size differs from canvas size
+  const scaleX = editCanvasRef.value.width / rect.width
+  const scaleY = editCanvasRef.value.height / rect.height
+  mousePos.value = { x: x * scaleX, y: y * scaleY }
+  if (isDrawing && editCtx) drawBrush(e)
 }
 
 const onMouseUp = () => { isDrawing = false }
-const onMouseLeave = () => { isDrawing = false }
+const onMouseLeave = () => { isDrawing = false; mousePos.value = { x: -1, y: -1 } }
 
 const drawBrush = (e: MouseEvent) => {
   if (!editCtx || !editCanvasRef.value) return
   const rect = editCanvasRef.value.getBoundingClientRect()
-  const x = e.clientX - rect.left
-  const y = e.clientY - rect.top
+  const scaleX = editCanvasRef.value.width / rect.width
+  const scaleY = editCanvasRef.value.height / rect.height
+  const x = (e.clientX - rect.left) * scaleX
+  const y = (e.clientY - rect.top) * scaleY
 
   editCtx.globalCompositeOperation = 'source-over'
-  editCtx.fillStyle = 'rgba(255, 0, 0, 0.35)'
+  editCtx.fillStyle = 'rgba(255, 0, 0, 0.6)'
   editCtx.beginPath()
   editCtx.arc(x, y, brushSize.value, 0, Math.PI * 2)
   editCtx.fill()
@@ -316,18 +344,29 @@ const submitEdit = async () => {
         </div>
 
         <!-- Canvas stack -->
-        <div class="relative border rounded-lg overflow-hidden" style="width: 100%; height: 400px;">
+        <div class="relative border rounded-lg overflow-hidden" :style="canvasContainerStyle">
           <canvas
             ref="canvasRef"
-            class="absolute inset-0 w-full h-full"
+            class="absolute inset-0"
           />
           <canvas
             ref="editCanvasRef"
-            class="absolute inset-0 w-full h-full cursor-none"
+            class="absolute inset-0 cursor-crosshair"
             @mousedown="onMouseDown"
             @mousemove="onMouseMove"
             @mouseup="onMouseUp"
             @mouseleave="onMouseLeave"
+          />
+          <!-- Brush cursor preview circle -->
+          <div
+            v-if="mousePos.x >= 0"
+            class="absolute pointer-events-none rounded-full border-2 border-white"
+            :style="{
+              width: brushSize * 2 + 'px',
+              height: brushSize * 2 + 'px',
+              left: mousePos.x - brushSize + 'px',
+              top: mousePos.y - brushSize + 'px',
+            }"
           />
         </div>
 
@@ -341,7 +380,7 @@ const submitEdit = async () => {
             @keyup.enter="submitEdit"
           />
           <el-button size="small" type="primary" :loading="isEditing" @click="submitEdit">确认修改</el-button>
-          <el-button size="small" @click="exitModifyMode">取消</el-button>
+          <el-button size="small" @click="exitModifyMode">返回</el-button>
         </div>
       </div>
     </div>
