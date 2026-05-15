@@ -44,6 +44,7 @@ export function useKnowledgeBase() {
   // === 加载状态 ===
   const loading = ref(false)
   const searchLoading = ref(false)
+  const activeFolderFilter = ref('')
 
   // ========== 项目管理 ==========
 
@@ -149,6 +150,7 @@ export function useKnowledgeBase() {
 
   const loadDocuments = async (folderId?: string) => {
     if (!activeProjectId.value) { documents.value = []; return }
+    activeFolderFilter.value = folderId || ''
     try {
       const params = folderId ? `?folder_id=${folderId}` : ''
       const r = await axios.get(apiUrl(`/api/kb/project/${activeProjectId.value}/documents${params}`))
@@ -165,7 +167,7 @@ export function useKnowledgeBase() {
       }
       if (folderId) headers['X-Folder-Id'] = folderId
       const r = await axios.post(apiUrl(`/api/kb/project/${activeProjectId.value}/upload`), file, { headers, timeout: 120000 })
-      if (r.data.success) { await loadDocuments(); return true }
+      if (r.data.success) { await loadDocuments(activeFolderFilter.value || undefined); return true }
       ElMessage.warning(r.data.message || '上传失败')
       return false
     } catch (e: any) { ElMessage.error('上传失败: ' + getErrMsg(e)); return false }
@@ -176,7 +178,7 @@ export function useKnowledgeBase() {
     if (!activeProjectId.value) return false
     try {
       const r = await axios.put(apiUrl(`/api/kb/project/${activeProjectId.value}/doc/${docId}`), updates)
-      if (r.data.success) { await loadDocuments(); return true }
+      if (r.data.success) { await loadDocuments(activeFolderFilter.value || undefined); return true }
       return false
     } catch { return false }
   }
@@ -184,7 +186,7 @@ export function useKnowledgeBase() {
   const deleteDocument = async (docId: string) => {
     if (!activeProjectId.value) return
     await axios.delete(apiUrl(`/api/kb/project/${activeProjectId.value}/doc/${docId}`))
-    await loadDocuments()
+    await loadDocuments(activeFolderFilter.value || undefined)
   }
 
   const clearAll = async () => {
@@ -380,7 +382,7 @@ export function useKnowledgeBase() {
     showKB, isUploadingKB, showChunkSizeDialog,
     projects, activeProjectId, folders, documents,
     kbStats, searchResults, backups, vocabList,
-    chunkSizeMin, chunkSizeMax, loading, searchLoading,
+    chunkSizeMin, chunkSizeMax, loading, searchLoading, activeFolderFilter,
 
     // 项目管理
     loadProjects, createProject, renameProject, deleteProject, switchProject,

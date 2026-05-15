@@ -40,7 +40,10 @@ const onSelectFolder = async () => {
   const api = (window as any).electronAPI
   if (api?.selectFolder) {
     const fp = await api.selectFolder()
-    if (fp) folderPath.value = fp
+    if (fp) {
+      // electron may return string, object with filePath/path, or null
+      folderPath.value = typeof fp === 'string' ? fp : (fp.filePath || fp.path || String(fp))
+    }
   } else {
     ElMessage.warning('当前环境不支持选择文件夹，请手动输入路径')
   }

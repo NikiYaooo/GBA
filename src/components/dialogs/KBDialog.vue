@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Database, FileText, Pen } from 'lucide-vue-next'
+import { Database, FileText, Pen, Folder } from 'lucide-vue-next'
 import { ElMessageBox } from 'element-plus'
 import type { KBProject, KBFolder, KBDocumentV2, KBStats, KBBackup, KBSearchResult } from '@/types'
 
@@ -229,7 +229,6 @@ const onOpen = () => {
             @clear="emit('loadDocuments', activeFolder || undefined)"
             @keyup.enter="emit('search', searchQuery)"
           />
-          <el-button size="small" @click="emit('openVocabDialog')">词库</el-button>
         </div>
 
         <!-- Upload drop zone -->
@@ -252,6 +251,21 @@ const onOpen = () => {
           <el-button size="small" @click="emit('openChunkSizeDialog')">
             切片设置
           </el-button>
+        </div>
+
+        <!-- Folder list (clickable to switch tab) -->
+        <div v-if="folders.length > 0" class="flex flex-wrap gap-2 mb-3">
+          <div
+            v-for="f in folders"
+            :key="f.id"
+            class="flex items-center gap-1 px-3 py-1.5 rounded-md cursor-pointer text-xs border"
+            :class="activeFolder === f.id ? 'bg-primary-light text-primary border-primary' : 'hover:bg-app-hover'"
+            @click="activeFolder = f.id; onFolderChange(f.id)"
+            @contextmenu.prevent="onFolderContextMenu($event, f)"
+          >
+            <Folder class="w-3.5 h-3.5" />
+            {{ f.name }}
+          </div>
         </div>
 
         <!-- Document list -->
