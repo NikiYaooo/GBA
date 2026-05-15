@@ -19,39 +19,19 @@ def _get_config():
     return {"models": {}}
 
 
-QWEN_TASK_POLL_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
 
 
-async def _poll_qwen_task(task_id: str, api_key: str, timeout: float = 120) -> dict | None:
-    """Poll DashScope task endpoint until completion or timeout."""
-    headers = {"Authorization": f"Bearer {api_key}"}
-    deadline = asyncio.get_event_loop().time() + timeout
-    async with httpx.AsyncClient(timeout=10) as client:
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                resp = await client.get(QWEN_TASK_POLL_URL.format(task_id=task_id), headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    status = data.get("output", {}).get("task_status", "")
-                    if status == "SUCCEEDED":
-                        return data
-                    if status in ("FAILED", "CANCELED"):
-                        return None
-                # else: retry
-            except Exception:
-                pass
-            await asyncio.sleep(2)
-    return None  # timeout
 
 
 IMAGE_MODEL_ENDPOINTS = {
     "GPT-Image 2": "https://api.openai.com/v1/images/generations",
-    "Qwen-Image 2": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-to-image/text-to-image-generation",
+    "Qwen-Image 2": "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations",
     "Midjourney": "",
     "Google Banana": "",
     "豆包Seedream": "",
     "Stable Diffusion（本地）": "",
 }
+QWEN_EDIT_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/images/edits"
 
 
 @router.post("/api/image/enhance-prompt")
@@ -199,7 +179,7 @@ async def generate_image(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
-    # Qwen-Image 2（通义万相）
+    # Qwen-Image 2（通义万相）— OpenAI 兼容模式
     if model_name == "Qwen-Image 2":
         cfg = model_configs.get("Qwen-Image 2", {})
         api_key = cfg.get("apiKey", "")
@@ -211,30 +191,30 @@ async def generate_image(payload: dict = Body(...)):
         }
         body = {
             "model": "qwen-image-2.0",
-            "input": {"prompt": prompt},
-            "parameters": {"size": "1024x1024"},
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024",
         }
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(IMAGE_MODEL_ENDPOINTS["Qwen-Image 2"], json=body, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    task_status = data.get("output", {}).get("task_status", "")
-                    # Handle async task polling
-                    if task_status in ("PENDING", "RUNNING"):
-                        task_id = data.get("output", {}).get("task_id", "")
-                        if task_id:
-                            poll_result = await _poll_qwen_task(task_id, api_key)
-                            if poll_result:
-                                data = poll_result
-                            else:
-                                return {"success": False, "message": "生图任务超时或失败"}
-                    results = data.get("output", {}).get("results", [])
-                    if results and results[0].get("image"):
-                        b64 = results[0]["image"]
-                        if not b64.startswith("data:"):
-                            b64 = f"data:image/png;base64,{b64}"
-                        return {"success": True, "data": {"data_uri": b64, "revised_prompt": prompt}}
+                    items = data.get("data", [])
+                    if items:
+                        b64 = items[0].get("b64_json", "")
+                        if b64:
+                            if not b64.startswith("data:"):
+                                b64 = f"data:image/png;base64,{b64}"
+                            revised = items[0].get("revised_prompt", prompt)
+                            return {"success": True, "data": {"data_uri": b64, "revised_prompt": revised}}
+                        url = items[0].get("url", "")
+                        if url:
+                            img_resp = await client.get(url, timeout=30)
+                            if img_resp.status_code == 200:
+                                import base64
+                                b64 = base64.b64encode(img_resp.content).decode("utf-8")
+                                return {"success": True, "data": {"data_uri": f"data:image/png;base64,{b64}", "revised_prompt": items[0].get("revised_prompt", prompt)}}
                     return {"success": False, "message": "生图未返回图片结果"}
                 detail = ""
                 try: detail = resp.text[:300]
@@ -329,8 +309,9 @@ async def test_image_model(payload: dict = Body(...)):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         body = {
             "model": "qwen-image-2.0",
-            "input": {"prompt": "test"},
-            "parameters": {"size": "1024x1024"},
+            "prompt": "test",
+            "n": 1,
+            "size": "1024x1024",
         }
         try:
             async with httpx.AsyncClient(timeout=15) as client:
@@ -497,7 +478,7 @@ async def edit_image(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
-    # Qwen-Image 2 修改（支持涂抹局部重绘）
+    # Qwen-Image 2 修改 — OpenAI 兼容模式
     if model_name == "Qwen-Image 2":
         cfg = model_configs.get("Qwen-Image 2", {})
         api_key = cfg.get("apiKey", "")
@@ -509,12 +490,12 @@ async def edit_image(payload: dict = Body(...)):
         header, b64data = data_uri.split(",", 1)
         img_bytes = b64mod.b64decode(b64data)
         # 转换 mask：前端格式（不透明白=保留，透明=修改）→ Qwen格式（白=修改，黑=保留）
+        mask_bytes_ready = b""
         if mask_uri:
             try:
                 m_header, m_b64 = mask_uri.split(",", 1)
-                mask_bytes = b64mod.b64decode(m_b64)
-                mask_pil = PILImg.open(io.BytesIO(mask_bytes)).convert("RGBA")
-                # Resize mask to match original image
+                mb = b64mod.b64decode(m_b64)
+                mask_pil = PILImg.open(io.BytesIO(mb)).convert("RGBA")
                 orig_pil = PILImg.open(io.BytesIO(img_bytes))
                 if mask_pil.size != orig_pil.size:
                     mask_pil = mask_pil.resize(orig_pil.size, PILImg.NEAREST)
@@ -525,50 +506,40 @@ async def edit_image(payload: dict = Body(...)):
                 w, h = mask_pil.size
                 for y in range(h):
                     for x in range(w):
-                        if pixels[x, y][3] < 250:  # transparent = edit area
-                            qw_pixels[x, y] = (255, 255, 255)  # white for Qwen
-                        # else keep black (keep area)
+                        if pixels[x, y][3] < 250:
+                            qw_pixels[x, y] = (255, 255, 255)
                 mask_buf = io.BytesIO()
                 qwen_mask.save(mask_buf, format="PNG")
-                qwen_mask_b64 = b64mod.b64encode(mask_buf.getvalue()).decode("utf-8")
+                mask_bytes_ready = mask_buf.getvalue()
             except Exception:
-                qwen_mask_b64 = ""
-        else:
-            qwen_mask_b64 = ""
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": "qwen-image-2.0",
-            "input": {
-                "prompt": prompt,
-                "image": data_uri,
-            },
-            "parameters": {"size": "1024x1024"},
-        }
-        if qwen_mask_b64:
-            body["input"]["mask"] = f"data:image/png;base64,{qwen_mask_b64}"
+                mask_bytes_ready = b""
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(IMAGE_MODEL_ENDPOINTS.get("Qwen-Image 2", ""), json=body, headers=headers)
+            async with httpx.AsyncClient(timeout=180) as client:
+                files = {
+                    "image": ("image.png", img_bytes, "image/png"),
+                    "prompt": (None, prompt),
+                    "n": (None, "1"),
+                    "size": (None, "1024x1024"),
+                }
+                if mask_bytes_ready:
+                    files["mask"] = ("mask.png", mask_bytes_ready, "image/png")
+                headers = {"Authorization": f"Bearer {api_key}"}
+                resp = await client.post(QWEN_EDIT_ENDPOINT, files=files, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    task_status = data.get("output", {}).get("task_status", "")
-                    if task_status in ("PENDING", "RUNNING"):
-                        task_id = data.get("output", {}).get("task_id", "")
-                        if task_id:
-                            poll_result = await _poll_qwen_task(task_id, api_key)
-                            if poll_result:
-                                data = poll_result
-                            else:
-                                return {"success": False, "message": "修改任务超时或失败"}
-                    results = data.get("output", {}).get("results", [])
-                    if results and results[0].get("image"):
-                        b64 = results[0]["image"]
-                        if not b64.startswith("data:"):
-                            b64 = f"data:image/png;base64,{b64}"
-                        return {"success": True, "data": {"data_uri": b64}}
+                    items = data.get("data", [])
+                    if items:
+                        b64 = items[0].get("b64_json", "")
+                        if b64:
+                            if not b64.startswith("data:"):
+                                b64 = f"data:image/png;base64,{b64}"
+                            return {"success": True, "data": {"data_uri": b64}}
+                        url = items[0].get("url", "")
+                        if url:
+                            img_resp = await client.get(url, timeout=30)
+                            if img_resp.status_code == 200:
+                                b64 = b64mod.b64encode(img_resp.content).decode("utf-8")
+                                return {"success": True, "data": {"data_uri": f"data:image/png;base64,{b64}"}}
                     return {"success": False, "message": "修改未返回图片结果"}
                 detail = ""
                 try: detail = resp.text[:300]
