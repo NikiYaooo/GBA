@@ -79,7 +79,7 @@ async def generate_image(payload: dict = Body(...)):
 
     # GPT-Image 2 → use OpenAI /v1/images/generations
     if model_name == "GPT-Image 2":
-        cfg = model_configs.get("GPT", {})
+        cfg = model_configs.get("GPT-Image 2") or model_configs.get("GPT", {})
         api_key = cfg.get("apiKey", "")
         if not api_key:
             return {"success": False, "message": "GPT 未配置 API Key，请先在设置中配置"}
@@ -120,10 +120,11 @@ async def generate_image(payload: dict = Body(...)):
 
     # 豆包Seedream
     if model_name == "豆包Seedream":
-        cfg = model_configs.get("豆包", {})
+        # 优先查生图模型名，再 fallback 到 AI 模型名
+        cfg = model_configs.get("豆包Seedream") or model_configs.get("豆包", {})
         api_key = cfg.get("apiKey", "")
         if not api_key:
-            return {"success": False, "message": "豆包未配置 API Key"}
+            return {"success": False, "message": "豆包Seedream 未配置 API Key，请先在设置中配置"}
         endpoint = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -164,7 +165,10 @@ async def generate_image(payload: dict = Body(...)):
                                         "revised_prompt": prompt,
                                     }
                                 }
-                return {"success": False, "message": f"生图失败 (HTTP {resp.status_code})"}
+                detail = ""
+                try: detail = resp.text[:200]
+                except: pass
+                return {"success": False, "message": f"生图失败 (HTTP {resp.status_code}) {detail}".strip()}
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
@@ -222,7 +226,10 @@ async def test_image_model(payload: dict = Body(...)):
                 resp = await client.post("https://api.openai.com/v1/images/generations", json=body, headers=headers)
                 if resp.status_code == 200:
                     return {"success": True, "message": "连接成功"}
-                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code})"}
+                detail = ""
+                try: detail = resp.text[:200]
+                except: pass
+                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code}) {detail}".strip()}
         except Exception as e:
             return {"success": False, "message": f"连接异常: {str(e)}"}
 
@@ -236,7 +243,10 @@ async def test_image_model(payload: dict = Body(...)):
                 resp = await client.post("https://ark.cn-beijing.volces.com/api/v3/images/generations", json=body, headers=headers)
                 if resp.status_code == 200:
                     return {"success": True, "message": "连接成功"}
-                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code})"}
+                detail = ""
+                try: detail = resp.text[:200]
+                except: pass
+                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code}) {detail}".strip()}
         except Exception as e:
             return {"success": False, "message": f"连接异常: {str(e)}"}
 

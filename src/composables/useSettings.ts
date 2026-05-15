@@ -31,10 +31,12 @@ export function useSettings(models: Ref<{ name: string; type: 'cloud' | 'local' 
   const loadConfig = async () => {
     try {
       const r = await axios.get(apiUrl('/api/config'))
-      const cfg: Record<string, ModelConfig> = {}
       const fetched = r.data.success && r.data.data?.models ? r.data.data.models : {}
+      // Start with all saved configs (including image models)
+      const cfg: Record<string, ModelConfig> = { ...fetched }
+      // Ensure AI models have at minimum empty config
       models.value.forEach(m => {
-        cfg[m.name] = fetched[m.name] || { modelId: '', apiKey: '' }
+        if (!cfg[m.name]) cfg[m.name] = { modelId: '', apiKey: '' }
       })
       modelConfigs.value = cfg
       if (r.data.success && r.data.data?.tortoiseSvnPath) {
