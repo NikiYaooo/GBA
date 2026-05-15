@@ -342,10 +342,17 @@ const onOpen = () => {
 
         <!-- Context menu for folders -->
         <teleport to="body">
+          <!-- Backdrop to catch clicks outside -->
           <div
             v-if="showContextMenu"
-            class="fixed z-9999"
-            :style="{ left: contextMenuPos.x + 'px', top: contextMenuPos.y + 'px' }"
+            class="fixed inset-0"
+            style="z-index: 99998"
+            @click="closeContextMenu"
+          />
+          <div
+            v-if="showContextMenu"
+            class="fixed"
+            :style="{ left: contextMenuPos.x + 'px', top: contextMenuPos.y + 'px', zIndex: 99999 }"
           >
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg border py-1 min-w-[120px]">
               <div

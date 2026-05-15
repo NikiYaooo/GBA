@@ -83,7 +83,7 @@ import KBVocabDialog from '@/components/dialogs/KBVocabDialog.vue'
 import KBChunkSizeDialog from '@/components/dialogs/KBChunkSizeDialog.vue'
 import KBBatchImportDialog from '@/components/dialogs/KBBatchImportDialog.vue'
 import ToolsDialog from '@/components/dialogs/ToolsDialog.vue'
-import UIDialog from '@/components/dialogs/UIDialog.vue'
+import ImageToolDialog from '@/components/dialogs/ImageToolDialog.vue'
 
 // --- Composables ---
 const activeCategory = ref('doc')
@@ -137,17 +137,8 @@ const handleKeydown = (e: KeyboardEvent) => {
   }
 }
 
-// --- UI generation dialog ---
-const showUIDialog = ref(false)
-const handleOpenUI = () => {
-  if (!docs.currentDoc.value?.id) { ElMessage.warning('请先选择文档'); return }
-  const ext = (docs.currentDoc.value.name || '').split('.').pop()?.toLowerCase() || ''
-  if (['xlsx', 'xls'].includes(ext) || docs.currentDoc.value.category === 'excel') {
-    ElMessage.warning('仅文档支持界面生成，配置表不支持')
-    return
-  }
-  showUIDialog.value = true
-}
+// --- Image tool dialog ---
+const showImageToolDialog = ref(false)
 
 // --- Context menu ---
 const ctxMenu = ref({ visible: false, x: 0, y: 0, doc: null as DocRecord | null })
@@ -887,7 +878,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
         <div class="grid grid-cols-2 gap-2">
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="tools.openTools()"><CheckCircle2 class="w-5 h-5 text-green-600" /><span>快捷工具</span></el-button>
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="showImitateDialog = true" :loading="ai.isProcessing.value"><Sparkles class="w-5 h-5 text-purple-600" /><span>智能PRD</span></el-button>
-          <el-button class="!m-0 h-20 flex flex-col gap-2" :loading="ai.isProcessing.value" @click="handleOpenUI"><Image class="w-5 h-5 text-blue-500" /><span>界面生成</span></el-button>
+          <el-button class="!m-0 h-20 flex flex-col gap-2" @click="showImageToolDialog = true"><Image class="w-5 h-5 text-blue-500" /><span>图片工具</span></el-button>
           <el-button class="!m-0 h-20 flex flex-col gap-2" @click="runLogicCompletion" :loading="ai.isProcessing.value"><Zap class="w-5 h-5 text-orange-600" /><span>逻辑补完</span></el-button>
         </div>
       </div>
@@ -927,12 +918,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @submit="runImitateAndCreate"
     />
 
-    <UIDialog
-      v-model:visible="showUIDialog"
-      :doc-content="docs.currentDoc.value.content || ''"
-      :doc-name="docs.currentDoc.value.name || ''"
-      :doc-id="docs.currentDoc.value.id || ''"
-    />
+    <ImageToolDialog v-model:visible="showImageToolDialog" />
 
     <PromptDialog
       v-model:visible="prompts.showPromptDialog.value"

@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import type { ModelConfig, Profession, PromptTemplate } from '@/types'
-import { Trash2, Plus } from 'lucide-vue-next'
+import { Trash2, Plus, Image } from 'lucide-vue-next'
 
 const visible = defineModel<boolean>('visible', { default: false })
+
+const imageModels = [
+  { name: 'GPT-Image 2', type: 'cloud' as const },
+  { name: 'Midjourney', type: 'cloud' as const },
+  { name: 'Google Banana', type: 'cloud' as const },
+  { name: '豆包Seedream', type: 'cloud' as const },
+  { name: 'Stable Diffusion（本地）', type: 'local' as const },
+]
 
 const props = defineProps<{
   autoStart: boolean
@@ -41,6 +49,16 @@ const isDefaultPrompt = (prompt: PromptTemplate) => prompt.id === 'default'
 
 const currentProfession = () => props.professionsFull.find(p => p.id === props.selectedImitationProfession)
 const customPrompts = () => (currentProfession()?.prompts || []).filter(p => !isDefaultPrompt(p))
+
+const getImageModelConfig = (name: string) => {
+  return props.modelConfigs[name] || { modelId: '', apiKey: '' }
+}
+const setImageModelConfig = (name: string, key: string, value: string) => {
+  if (!props.modelConfigs[name]) {
+    props.modelConfigs[name] = { modelId: '', apiKey: '' }
+  }
+  ;(props.modelConfigs[name] as any)[key] = value
+}
 </script>
 
 <template>
@@ -137,6 +155,40 @@ const customPrompts = () => (currentProfession()?.prompts || []).filter(p => !is
         </div>
         <div class="mt-4 flex justify-end">
           <el-button type="primary" @click="emit('saveConfig')">保存模型配置</el-button>
+        </div>
+      </el-tab-pane>
+
+      <!-- 生图配置 -->
+      <el-tab-pane label="生图配置">
+        <div class="py-4 space-y-4 max-h-[400px] overflow-y-auto pr-2">
+          <p class="text-xs text-app-muted mb-2">配置生图AI模型的API信息。GPT-Image 2 使用GPT的API Key，豆包Seedream使用豆包的API Key。</p>
+          <div v-for="model in imageModels" :key="model.name" class="p-4 bg-primary-light border border-app-light rounded-lg">
+            <div class="flex items-center justify-between mb-3">
+              <span class="font-semibold text-sm">{{ model.name }}</span>
+              <el-tag size="small" :type="model.type === 'local' ? 'info' : 'primary'">
+                {{ model.type === 'local' ? '本地' : '云端' }}
+              </el-tag>
+            </div>
+            <div class="space-y-3">
+              <div v-if="model.type !== 'local'">
+                <label class="text-xs text-app-secondary block mb-1">API Key</label>
+                <el-input
+                  :model-value="getImageModelConfig(model.name).apiKey"
+                  type="password" show-password size="small" placeholder="sk-..."
+                  @update:model-value="(v: string) => setImageModelConfig(model.name, 'apiKey', v)"
+                />
+              </div>
+              <div>
+                <label class="text-xs text-app-secondary block mb-1">{{ model.type === 'local' ? '本地地址' : '模型 ID（可选）' }}</label>
+                <el-input
+                  :model-value="getImageModelConfig(model.name).modelId"
+                  size="small"
+                  :placeholder="model.type === 'local' ? 'http://127.0.0.1:7860' : '留空使用默认'"
+                  @update:model-value="(v: string) => setImageModelConfig(model.name, 'modelId', v)"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </el-tab-pane>
 

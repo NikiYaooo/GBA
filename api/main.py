@@ -16,6 +16,7 @@ import routers.prompts as prompts_router
 import routers.mindmap as mindmap_router
 import routers.template as template_router
 import routers.reminders as reminders_router
+import routers.image_gen as image_gen_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = get_app_data_dir()
@@ -62,6 +63,7 @@ app.add_middleware(
 # 将共享服务挂载到路由器
 kb_router.router.kb = kb
 ai_router.router.ai_service = ai_service
+image_gen_router.router.ai_service = ai_service
 
 # 注册路由
 app.include_router(documents_router.router)
@@ -73,6 +75,7 @@ app.include_router(prompts_router.router)
 app.include_router(mindmap_router.router)
 app.include_router(template_router.router)
 app.include_router(reminders_router.router)
+app.include_router(image_gen_router.router)
 
 
 @app.get("/")
