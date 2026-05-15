@@ -135,7 +135,7 @@ async def generate_image(payload: dict = Body(...)):
             "model": model_id,
             "prompt": prompt,
             "n": 1,
-            "size": "1024x1024",
+            "size": "1920x1920",
         }
         try:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -237,7 +237,7 @@ async def test_image_model(payload: dict = Body(...)):
         if not api_key:
             return {"success": False, "message": "缺少 API Key"}
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        body = {"model": model_id or "seedream-2-0", "prompt": "test", "n": 1, "size": "1024x1024"}
+        body = {"model": model_id or "seedream-2-0", "prompt": "test", "n": 1, "size": "1920x1920"}
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post("https://ark.cn-beijing.volces.com/api/v3/images/generations", json=body, headers=headers)
