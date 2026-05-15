@@ -374,9 +374,45 @@ async def edit_image(payload: dict = Body(...)):
                 )
                 # 如果 edits 端点不存在（404），回退到 generation
                 if resp.status_code == 404:
+                    # 分析 mask 确定涂抹区域的位置和范围
+                    region_desc = "指定区域"
+                    if mask_uri:
+                        try:
+                            from PIL import Image as PILImage
+                            import io
+                            m_bytes = b64mod.b64decode(mask_b64)
+                            m_img = PILImage.open(io.BytesIO(m_bytes)).convert("RGBA")
+                            m_w, m_h = m_img.size
+                            m_pixels = m_img.load()
+                            # Find bounding box of transparent pixels (edit area)
+                            min_x, min_y = m_w, m_h
+                            max_x, max_y = 0, 0
+                            for y in range(m_h):
+                                for x in range(m_w):
+                                    if m_pixels[x, y][3] < 250:  # transparent = edit
+                                        min_x = min(min_x, x)
+                                        min_y = min(min_y, y)
+                                        max_x = max(max_x, x)
+                                        max_y = max(max_y, y)
+                            if max_x > min_x and max_y > min_y:
+                                cx = (min_x + max_x) / 2 / m_w
+                                cy = (min_y + max_y) / 2 / m_h
+                                # Position description
+                                vpos = "顶部" if cy < 0.33 else "底部" if cy > 0.67 else "中间"
+                                hpos = "左侧" if cx < 0.33 else "右侧" if cx > 0.67 else "中间"
+                                pos_parts = []
+                                if vpos != "中间": pos_parts.append(vpos)
+                                if hpos != "中间": pos_parts.append(hpos)
+                                if not pos_parts: pos_parts.append("正中央")
+                                area_ratio = ((max_x - min_x) * (max_y - min_y)) / (m_w * m_h)
+                                size_desc = "小部分" if area_ratio < 0.15 else "约一半" if area_ratio < 0.4 else "大部分"
+                                region_desc = f"图片的{'的'.join(pos_parts)}{size_desc}区域"
+                        except Exception:
+                            pass
+                    gen_prompt = f"对{region_desc}进行修改：{prompt}。请保持图片其他所有内容与原始图片完全一致，只修改{region_desc}。"
                     gen_body = {
                         "model": cfg.get("modelId", "seedream-2-0"),
-                        "prompt": f"{prompt}（修改图片，基于原图进行修改）",
+                        "prompt": gen_prompt,
                         "n": 1,
                         "size": "1920x1920",
                     }

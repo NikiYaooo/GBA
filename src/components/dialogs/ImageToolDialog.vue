@@ -241,16 +241,42 @@ const clearMask = () => {
   editCtx.clearRect(0, 0, editCanvasRef.value.width, editCanvasRef.value.height)
 }
 
+// Generate mask in the correct format for the edit API:
+// opaque white = keep, transparent = modify (inverse of display canvas)
+const generateMaskDataUrl = (): string => {
+  const src = editCanvasRef.value
+  if (!src) return ''
+  const w = src.width, h = src.height
+  const mc = document.createElement('canvas')
+  mc.width = w; mc.height = h
+  const mtx = mc.getContext('2d')!
+  // Fill with opaque white (keep everything by default)
+  mtx.fillStyle = '#ffffff'
+  mtx.fillRect(0, 0, w, h)
+  // Get painted pixels from the display canvas (where alpha > 0 = user painted)
+  const srcCtx = src.getContext('2d')!
+  const srcData = srcCtx.getImageData(0, 0, w, h)
+  const dstData = mtx.getImageData(0, 0, w, h)
+  // Wherever the user painted (alpha > 10), set mask to transparent (= modify)
+  for (let i = 3; i < srcData.data.length; i += 4) {
+    if (srcData.data[i] > 10) {
+      dstData.data[i] = 0 // alpha = 0 → transparent → modify this area
+    }
+  }
+  mtx.putImageData(dstData, 0, 0)
+  return mc.toDataURL('image/png')
+}
+
 // === 提交修改 ===
 const submitEdit = async () => {
   if (!modifyPrompt.value.trim()) { ElMessage.warning('请输入修改需求'); return }
   if (!currentImage.value) return
   isEditing.value = true
   try {
-    // Get mask data URL
+    // Get mask data URL (correct format: opaque white bg, transparent = edit area)
     let maskUri = ''
     if (editCanvasRef.value) {
-      maskUri = editCanvasRef.value.toDataURL('image/png')
+      maskUri = generateMaskDataUrl()
     }
     const r = await axios.post(apiUrl('/api/image/edit'), {
       model: selectedModel.value,
