@@ -141,25 +141,54 @@ const onProjectContextMenu = async (e: MouseEvent, project: KBProject) => {
 
 const onFolderContextMenu = async (e: MouseEvent, folder: KBFolder) => {
   e.preventDefault()
-  const action = await ElMessageBox.alert(
-    `文件夹: ${folder.name}`,
-    '文件夹操作',
-    { confirmButtonText: '关闭', showCancelButton: true, cancelButtonText: '重命名', showClose: false }
-  ).then(() => null).catch(() => 'rename' as const)
+  closeContextMenu()
+  contextMenuTarget.value = folder
+  contextMenuPos.value = { x: e.clientX, y: e.clientY }
+  showContextMenu.value = true
+}
 
-  if (action === 'rename') {
+const showContextMenu = ref(false)
+const contextMenuPos = ref({ x: 0, y: 0 })
+const contextMenuTarget = ref<KBFolder | null>(null)
+
+const closeContextMenu = () => {
+  showContextMenu.value = false
+  contextMenuTarget.value = null
+}
+
+const onContextMenuRename = async () => {
+  const folder = contextMenuTarget.value
+  closeContextMenu()
+  if (!folder) return
+  try {
     const { value } = await ElMessageBox.prompt('请输入新名称', '重命名文件夹', { inputValue: folder.name })
     if (value && value !== folder.name) emit('renameFolder', folder.id, value)
-  } else {
-    try {
-      await ElMessageBox.confirm(
-        `确定删除文件夹 "${folder.name}"？文档不会被删除，仅取消分类。`,
-        '删除文件夹',
-        { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-      )
-      emit('deleteFolder', folder.id)
-    } catch { /* cancelled */ }
-  }
+  } catch { /* cancelled */ }
+}
+
+const onContextMenuDelete = async () => {
+  const folder = contextMenuTarget.value
+  closeContextMenu()
+  if (!folder) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除文件夹 "${folder.name}"？文档不会被删除，仅取消分类。`,
+      '删除文件夹',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+    emit('deleteFolder', folder.id)
+  } catch { /* cancelled */ }
+}
+
+const filteredDocuments = computed(() => {
+  if (!searchQuery.value) return props.documents
+  const q = searchQuery.value.toLowerCase()
+  return props.documents.filter(d => d.filename.toLowerCase().includes(q))
+})
+
+// 点击其他地方关闭右键菜单
+const onContentClick = () => {
+  if (showContextMenu.value) closeContextMenu()
 }
 
 const onOpen = () => {
@@ -177,6 +206,7 @@ const onOpen = () => {
     top="5vh"
     class="kb-dialog"
     @open="onOpen"
+    @click="onContentClick"
   >
     <div class="kb-layout" style="display: flex; gap: 16px; min-height: 420px;">
       <!-- Left: Project panel -->
@@ -231,8 +261,7 @@ const onOpen = () => {
             size="small"
             placeholder="搜索文档名..."
             clearable
-            @clear="emit('loadDocuments', activeFolder || undefined)"
-            @keyup.enter="emit('search', searchQuery)"
+            @clear="searchQuery = ''"
           />
         </div>
 
@@ -259,7 +288,7 @@ const onOpen = () => {
         </div>
 
         <!-- Folder + Document list -->
-        <div class="max-h-[300px] overflow-y-auto">
+        <div class="max-h-[300px] overflow-y-auto" @click="onContentClick">
           <!-- Back to root when inside a folder -->
           <div
             v-if="activeFolder"
@@ -284,9 +313,9 @@ const onOpen = () => {
             </div>
           </template>
 
-          <!-- Document items -->
+          <!-- Document items (filtered by search) -->
           <div
-            v-for="doc in documents" :key="doc.id"
+            v-for="doc in filteredDocuments" :key="doc.id"
             class="flex items-center gap-3 p-2 border-b text-sm hover:bg-app-hover"
           >
             <FileText class="w-4 h-4 text-app-muted shrink-0" />
@@ -303,13 +332,33 @@ const onOpen = () => {
             <span class="text-xs text-app-muted">{{ formatSize(doc.file_size) }}</span>
             <el-button link size="small" type="danger" @click="emit('deleteDocument', doc.id)">删除</el-button>
           </div>
-          <div v-if="!activeFolder && folders.length === 0 && documents.length === 0" class="text-center py-8 text-app-muted text-sm">
-            暂无文档
+          <div v-if="!activeFolder && folders.length === 0 && filteredDocuments.length === 0" class="text-center py-8 text-app-muted text-sm">
+            {{ searchQuery ? '没有匹配的文档' : '暂无文档' }}
           </div>
-          <div v-if="activeFolder && documents.length === 0" class="text-center py-8 text-app-muted text-sm">
+          <div v-if="activeFolder && filteredDocuments.length === 0" class="text-center py-8 text-app-muted text-sm">
             此文件夹为空
           </div>
         </div>
+
+        <!-- Context menu for folders -->
+        <teleport to="body">
+          <div
+            v-if="showContextMenu"
+            class="fixed z-9999"
+            :style="{ left: contextMenuPos.x + 'px', top: contextMenuPos.y + 'px' }"
+          >
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg border py-1 min-w-[120px]">
+              <div
+                class="px-4 py-2 text-sm cursor-pointer hover:bg-app-hover"
+                @click="onContextMenuRename"
+              >重命名</div>
+              <div
+                class="px-4 py-2 text-sm cursor-pointer hover:bg-app-hover text-red-500"
+                @click="onContextMenuDelete"
+              >删除</div>
+            </div>
+          </div>
+        </teleport>
       </div>
     </div>
 
