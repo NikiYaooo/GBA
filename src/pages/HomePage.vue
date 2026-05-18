@@ -159,6 +159,10 @@ const handleKeydown = (e: KeyboardEvent) => {
 // --- Image tool dialog ---
 const showImageToolDialog = ref(false)
 const libraryEditImageUri = ref('')
+const designPromptTemplate = computed(() => {
+  const designer = prompts.professionsFull.value.find((p: any) => p.id === 'designer')
+  return designer?.prompts?.[0]?.content || ''
+})
 watch(showImageToolDialog, (v) => { if (!v) libraryEditImageUri.value = '' })
 
 // --- Context menu ---
@@ -1106,6 +1110,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
     <ImageToolDialog
       v-model:visible="showImageToolDialog"
       :library-image-data-uri="libraryEditImageUri"
+      :design-prompt-template="designPromptTemplate"
       @save-to-library="(uri: string) => { imageLib.saveImage(uri, '未命名图片') }"
     />
 

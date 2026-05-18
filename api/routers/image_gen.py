@@ -320,7 +320,7 @@ async def enhance_prompt(payload: dict = Body(...)):
     if not text:
         return {"success": False, "message": "请输入提示内容"}
     system_prompt = (
-        "你是一名专业AI绘画提示词工程师。将用户输入的简单描述扩展为详细、专业的英文生图提示词。"
+        "你是一名专业AI绘画提示词工程师。请将用户输入的简单描述扩展为详细、专业的中文生图提示词。"
         "请直接输出优化后的prompt，不要加解释和前缀。包含：主体描述、环境、光照、风格、构图、画质关键词。"
     )
     svc = router.ai_service

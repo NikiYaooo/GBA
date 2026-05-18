@@ -9,6 +9,7 @@ const visible = defineModel<boolean>('visible', { default: false })
 
 const props2 = defineProps<{
   libraryImageDataUri?: string
+  designPromptTemplate?: string
 }>()
 
 const emit2 = defineEmits<{
@@ -118,7 +119,15 @@ const generate = async () => {
         enhancedPrompt.value = r.data.data.enhanced
       }
     } catch { /* use raw prompt */ }
-    const finalPrompt = enhancedPrompt.value || promptText
+    let finalPrompt = enhancedPrompt.value || promptText
+    // 如果"设计"职业有生图模板，将增强后的prompt填入模板占位位置
+    const template = props2.designPromptTemplate
+    if (template) {
+      const placeholder = '{{填入原画设定、人设、场景、风格、构图、情绪要求}}'
+      if (template.includes(placeholder)) {
+        finalPrompt = template.replace(placeholder, finalPrompt)
+      }
+    }
     const r = await axios.post(apiUrl('/api/image/generate'), {
       prompt: finalPrompt,
       model: selectedModel.value,
