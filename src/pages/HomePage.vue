@@ -215,28 +215,24 @@ const handleImageClick = async (img: any) => {
 }
 
 // --- Image upload ---
-const imageUploadInput = ref<HTMLInputElement>()
 const isUploading = ref(false)
-const uploadImage = (file?: File) => {
-  const f = file || imageUploadInput.value?.files?.[0]
-  if (!f) return
-  if (!f.type.startsWith('image/')) { ElMessage.warning('请选择图片文件'); return }
+const uploadImage = (file: File) => {
+  if (!file.type.startsWith('image/')) { ElMessage.warning('请选择图片文件'); return }
   isUploading.value = true
   const reader = new FileReader()
   reader.onload = async () => {
     const dataUri = reader.result as string
     try {
-      await imageLib.saveImage(dataUri, f.name.replace(/\.[^.]+$/, '') || '未命名图片')
+      await imageLib.saveImage(dataUri, file.name.replace(/\.[^.]+$/, '') || '未命名图片')
       ElMessage.success('已上传')
     } catch (e: any) {
       ElMessage.error('上传失败: ' + getErrMsg(e))
     } finally {
       isUploading.value = false
-      if (imageUploadInput.value) imageUploadInput.value.value = ''
     }
   }
   reader.onerror = () => { ElMessage.error('读取文件失败'); isUploading.value = false }
-  reader.readAsDataURL(f)
+  reader.readAsDataURL(file)
 }
 const dragOverFlag = ref(false)
 const onImageDragOver = (e: DragEvent) => { e.preventDefault(); dragOverFlag.value = true }
@@ -801,15 +797,6 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
 
         <!-- 图片库 -->
         <template v-else>
-          <div class="flex gap-1 mb-2">
-            <el-button size="small" plain class="flex-1 text-xs" @click="showImageToolDialog = true; libraryEditImageUri = ''">
-              <Image class="w-3.5 h-3.5 mr-1" />打开图片工具
-            </el-button>
-            <el-button size="small" plain class="flex-1 text-xs" :loading="isUploading" @click="imageUploadInput?.click()">
-              <Upload class="w-3.5 h-3.5 mr-1" />上传图片
-            </el-button>
-            <input ref="imageUploadInput" type="file" accept="image/*" class="hidden" @change="uploadImage()" />
-          </div>
           <div
             class="space-y-1 min-h-[100px]"
             :class="dragOverFlag ? 'ring-2 ring-primary rounded-lg ring-inset bg-primary/5' : ''"

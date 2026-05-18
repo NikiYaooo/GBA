@@ -3,7 +3,7 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { apiUrl, getErrMsg } from '@/utils/api'
-import { Save, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { Save, ChevronLeft, ChevronRight, Plus, X } from 'lucide-vue-next'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -51,6 +51,30 @@ const brushSize = ref(20)
 const isErasing = ref(false)
 const toggleErase = () => { isErasing.value = !isErasing.value }
 const paintedVersion = ref(0)
+
+// === 参考图片 ===
+const showReferenceStrip = ref(false)
+const referenceImages = ref<string[]>([])
+const referenceUploadRef = ref<HTMLInputElement | null>(null)
+const addReferenceImage = () => { referenceUploadRef.value?.click() }
+const onReferenceUpload = (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) { ElMessage.warning('请选择图片文件'); return }
+  const reader = new FileReader()
+  reader.onload = () => { referenceImages.value.push(reader.result as string) }
+  reader.readAsDataURL(file)
+  ;(e.target as HTMLInputElement).value = ''
+}
+const removeReferenceImage = (index: number) => { referenceImages.value.splice(index, 1) }
+
+// === 图片标签 ===
+const imageLabel = (index: number) => {
+  const img = images.value[index]
+  if (!img) return ''
+  if (img.revised_prompt && img.revised_prompt.length < 20) return img.revised_prompt
+  return '图片 ' + (index + 1)
+}
 
 // Canvas refs
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -341,14 +365,14 @@ const submitEdit = async () => {
   <el-dialog
     v-model="visible"
     title="图片工具"
-    width="820px"
+    width="920px"
     top="3vh"
     class="image-tool-dialog"
   >
-    <div class="space-y-4">
-      <!-- Model selector + prompt -->
+    <div class="space-y-3">
+      <!-- Model selector + prompt + ref + generate -->
       <div class="flex gap-2 items-center">
-        <el-select v-model="selectedModel" size="small" class="!w-36" placeholder="选择生图模型">
+        <el-select v-model="selectedModel" size="small" class="!w-32" placeholder="选择生图模型">
           <el-option
             v-for="m in imageModels"
             :key="m.name"
@@ -367,119 +391,164 @@ const submitEdit = async () => {
           class="flex-1"
           @keyup.ctrl.enter="generate"
         />
+        <el-button size="small" @click="showReferenceStrip = !showReferenceStrip" :type="showReferenceStrip ? 'primary' : 'default'">
+          参考图片
+        </el-button>
         <el-button size="small" type="primary" :loading="isGenerating" @click="generate">生图</el-button>
       </div>
 
-      <!-- Main content: image area or modify mode -->
-      <div v-if="!isModifyMode" class="flex flex-col items-center gap-3 min-h-[300px]">
-        <!-- Generated images area -->
-        <div v-if="images.length > 0" class="relative w-full flex items-center justify-center gap-2">
-          <el-button :disabled="!hasPrev" circle size="small" @click="currentIndex--">
-            <ChevronLeft class="w-4 h-4" />
-          </el-button>
-          <div class="flex-1 flex justify-center">
-            <img
-              :src="currentImage?.data_uri"
-              class="max-w-full max-h-[400px] rounded-lg shadow-md object-contain"
-              alt="生成的图片"
-            />
-          </div>
-          <el-button :disabled="!hasNext" circle size="small" @click="currentIndex++">
-            <ChevronRight class="w-4 h-4" />
-          </el-button>
+      <!-- Reference image strip (toggle) -->
+      <div v-if="showReferenceStrip" class="flex gap-2 items-center overflow-x-auto py-2 px-1 bg-gray-50 rounded-lg min-h-[72px]">
+        <div
+          v-for="(ref, i) in referenceImages" :key="i"
+          class="relative shrink-0 w-14 h-14 rounded-lg overflow-hidden border border-app group"
+        >
+          <img :src="ref" class="w-full h-full object-cover" />
+          <button
+            @click="removeReferenceImage(i)"
+            class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <X class="w-3 h-3" />
+          </button>
         </div>
-
-        <!-- Empty state -->
-        <div v-else class="text-app-muted text-sm py-12">
-          输入提示词后点击"生图"开始生成
+        <div
+          v-if="referenceImages.length < 5"
+          @click="addReferenceImage"
+          class="shrink-0 w-14 h-14 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-primary hover:text-primary transition-colors"
+        >
+          <Plus class="w-5 h-5" />
         </div>
-
-        <!-- Action buttons -->
-        <div v-if="images.length > 0" class="flex gap-2">
-          <el-button size="small" @click="saveImage">
-            <Save class="w-3.5 h-3.5 mr-1" />导出
-          </el-button>
-          <el-button size="small" type="primary" @click="enterModifyMode">
-            修改
-          </el-button>
-        </div>
-
-        <!-- Page indicator -->
-        <div v-if="images.length > 1" class="text-xs text-app-muted">
-          {{ currentIndex + 1 }} / {{ images.length }}
-        </div>
+        <input ref="referenceUploadRef" type="file" accept="image/*" class="hidden" @change="onReferenceUpload" />
+        <div v-if="referenceImages.length === 0" class="text-xs text-app-muted ml-2">点击上方 [+] 上传参考图片（最多5张）</div>
       </div>
 
-      <!-- Modify mode: canvas with brush -->
-      <div v-else class="space-y-3">
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-medium">
-            在图片上涂抹要修改的区域（<span class="text-blue-400">左键涂抹</span> / <span class="text-yellow-400">右键/Ctrl 擦除</span>）
-          </span>
-          <div class="flex items-center gap-2">
-            <el-button
-              size="small"
-              :type="isErasing ? 'warning' : 'default'"
-              @click="toggleErase"
-            >
-              {{ isErasing ? '擦除中' : '橡皮擦' }}
-            </el-button>
-            <span class="text-xs text-app-muted">画笔:</span>
-            <el-slider v-model="brushSize" :min="5" :max="80" class="!w-20" />
-            <span class="text-xs text-app-muted w-8">{{ brushSize }}px</span>
-          </div>
-        </div>
-
-        <!-- Canvas stack -->
-        <div class="relative border rounded-lg overflow-hidden" :style="canvasContainerStyle">
-          <canvas ref="canvasRef" class="absolute inset-0" />
-          <canvas
-            ref="editCanvasRef"
-            class="absolute inset-0 cursor-crosshair"
-            @mousedown="onMouseDown"
-            @mousemove="onMouseMove"
-            @mouseup="onMouseUp"
-            @mouseleave="onMouseLeave"
-            @contextmenu.prevent
-          />
-          <!-- Brush cursor preview -->
+      <!-- Main content: split layout -->
+      <div class="flex gap-3 min-h-[350px]">
+        <!-- Left: image name list -->
+        <div v-if="images.length > 0" class="w-32 shrink-0 border-r border-app-light pr-2 overflow-y-auto max-h-[420px] space-y-0.5">
           <div
-            v-if="mousePos.x >= 0"
-            class="absolute pointer-events-none rounded-full border-2"
-            :class="isErasing ? 'border-yellow-400' : 'border-white'"
-            :style="{
-              width: brushSize * 2 + 'px',
-              height: brushSize * 2 + 'px',
-              left: mousePos.x - brushSize + 'px',
-              top: mousePos.y - brushSize + 'px',
-            }"
-          />
+            v-for="(img, i) in images" :key="i"
+            @click="currentIndex = i"
+            :class="['p-2 text-xs rounded cursor-pointer transition-colors truncate', i === currentIndex ? 'bg-primary-light text-app-primary font-medium' : 'text-app-secondary hover:bg-app-hover']"
+          >
+            {{ imageLabel(i) }}
+          </div>
         </div>
 
-        <!-- Status bar + inputs -->
-        <div class="flex items-center justify-between">
-          <div class="flex gap-2 items-center">
-            <span class="text-xs" :class="hasMask ? 'text-green-500' : 'text-app-muted'">
-              已涂抹 {{ paintedPercent }}% 区域
-            </span>
-            <el-button v-if="hasMask" size="small" text @click="clearMask">清除涂抹</el-button>
+        <!-- Right: image preview or modify mode -->
+        <div class="flex-1 min-w-0">
+          <!-- ====== Non-modify mode ====== -->
+          <div v-if="!isModifyMode" class="flex flex-col items-center gap-3">
+            <!-- Generated images area -->
+            <div v-if="images.length > 0" class="relative w-full flex items-center justify-center gap-2">
+              <el-button :disabled="!hasPrev" circle size="small" @click="currentIndex--">
+                <ChevronLeft class="w-4 h-4" />
+              </el-button>
+              <div class="flex-1 flex justify-center">
+                <img
+                  :src="currentImage?.data_uri"
+                  class="max-w-full max-h-[400px] rounded-lg shadow-md object-contain"
+                  alt="生成的图片"
+                />
+              </div>
+              <el-button :disabled="!hasNext" circle size="small" @click="currentIndex++">
+                <ChevronRight class="w-4 h-4" />
+              </el-button>
+            </div>
+
+            <!-- Empty state -->
+            <div v-else class="text-app-muted text-sm py-12">
+              输入提示词后点击"生图"开始生成
+            </div>
+
+            <!-- Action buttons -->
+            <div v-if="images.length > 0" class="flex gap-2">
+              <el-button size="small" @click="saveImage">
+                <Save class="w-3.5 h-3.5 mr-1" />导出
+              </el-button>
+              <el-button size="small" type="primary" @click="enterModifyMode">
+                修改
+              </el-button>
+            </div>
+
+            <!-- Page indicator -->
+            <div v-if="images.length > 1" class="text-xs text-app-muted">
+              {{ currentIndex + 1 }} / {{ images.length }}
+            </div>
           </div>
-          <div class="flex gap-2 flex-1 ml-4">
-            <el-input
-              v-model="modifyPrompt"
-              size="small"
-              placeholder="输入修改需求（如：把背景换成森林）"
-              class="flex-1"
-              @keyup.enter="submitEdit"
-            />
-            <el-button
-              size="small"
-              type="primary"
-              :loading="isEditing"
-              :disabled="!hasMask || !modifyPrompt.trim()"
-              @click="submitEdit"
-            >确认修改</el-button>
-            <el-button size="small" @click="exitModifyMode">返回</el-button>
+
+          <!-- ====== Modify mode ====== -->
+          <div v-else class="space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium">
+                在图片上涂抹要修改的区域（<span class="text-blue-400">左键涂抹</span> / <span class="text-yellow-400">右键/Ctrl 擦除</span>）
+              </span>
+              <div class="flex items-center gap-2">
+                <el-button
+                  size="small"
+                  :type="isErasing ? 'warning' : 'default'"
+                  @click="toggleErase"
+                >
+                  {{ isErasing ? '擦除中' : '橡皮擦' }}
+                </el-button>
+                <span class="text-xs text-app-muted">画笔:</span>
+                <el-slider v-model="brushSize" :min="5" :max="80" class="!w-20" />
+                <span class="text-xs text-app-muted w-8">{{ brushSize }}px</span>
+              </div>
+            </div>
+
+            <!-- Canvas stack -->
+            <div class="relative border rounded-lg overflow-hidden" :style="canvasContainerStyle">
+              <canvas ref="canvasRef" class="absolute inset-0" />
+              <canvas
+                ref="editCanvasRef"
+                class="absolute inset-0 cursor-crosshair"
+                @mousedown="onMouseDown"
+                @mousemove="onMouseMove"
+                @mouseup="onMouseUp"
+                @mouseleave="onMouseLeave"
+                @contextmenu.prevent
+              />
+              <!-- Brush cursor preview -->
+              <div
+                v-if="mousePos.x >= 0"
+                class="absolute pointer-events-none rounded-full border-2"
+                :class="isErasing ? 'border-yellow-400' : 'border-white'"
+                :style="{
+                  width: brushSize * 2 + 'px',
+                  height: brushSize * 2 + 'px',
+                  left: mousePos.x - brushSize + 'px',
+                  top: mousePos.y - brushSize + 'px',
+                }"
+              />
+            </div>
+
+            <!-- Status bar + inputs -->
+            <div class="flex items-center justify-between">
+              <div class="flex gap-2 items-center">
+                <span class="text-xs" :class="hasMask ? 'text-green-500' : 'text-app-muted'">
+                  已涂抹 {{ paintedPercent }}% 区域
+                </span>
+                <el-button v-if="hasMask" size="small" text @click="clearMask">清除涂抹</el-button>
+              </div>
+              <div class="flex gap-2 flex-1 ml-4">
+                <el-input
+                  v-model="modifyPrompt"
+                  size="small"
+                  placeholder="输入修改需求（如：把背景换成森林）"
+                  class="flex-1"
+                  @keyup.enter="submitEdit"
+                />
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="isEditing"
+                  :disabled="!hasMask || !modifyPrompt.trim()"
+                  @click="submitEdit"
+                >确认修改</el-button>
+                <el-button size="small" @click="exitModifyMode">返回</el-button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
