@@ -158,6 +158,8 @@ const handleKeydown = (e: KeyboardEvent) => {
 
 // --- Image tool dialog ---
 const showImageToolDialog = ref(false)
+const libraryEditImageUri = ref('')
+watch(showImageToolDialog, (v) => { if (!v) libraryEditImageUri.value = '' })
 
 // --- Context menu ---
 const ctxMenu = ref({ visible: false, x: 0, y: 0, doc: null as DocRecord | null })
@@ -174,8 +176,6 @@ const closeImgCtxMenu = () => { imgCtxMenu.value.visible = false }
 const showImgCtxMenu = (e: MouseEvent, img: any) => {
   imgCtxMenu.value = { visible: true, x: e.clientX, y: e.clientY, image: img }
 }
-const libraryEditImageUri = ref('')
-
 const handleImageCommand = async (command: string, img: any) => {
   closeImgCtxMenu()
   if (command === 'saveAs') {
@@ -212,6 +212,40 @@ const handleImageClick = async (img: any) => {
     showImageToolDialog.value = true
     libraryEditImageUri.value = dataUri
   }
+}
+
+// --- Image upload ---
+const imageUploadInput = ref<HTMLInputElement>()
+const isUploading = ref(false)
+const uploadImage = (file?: File) => {
+  const f = file || imageUploadInput.value?.files?.[0]
+  if (!f) return
+  if (!f.type.startsWith('image/')) { ElMessage.warning('请选择图片文件'); return }
+  isUploading.value = true
+  const reader = new FileReader()
+  reader.onload = async () => {
+    const dataUri = reader.result as string
+    try {
+      await imageLib.saveImage(dataUri, f.name.replace(/\.[^.]+$/, '') || '未命名图片')
+      ElMessage.success('已上传')
+    } catch (e: any) {
+      ElMessage.error('上传失败: ' + getErrMsg(e))
+    } finally {
+      isUploading.value = false
+      if (imageUploadInput.value) imageUploadInput.value.value = ''
+    }
+  }
+  reader.onerror = () => { ElMessage.error('读取文件失败'); isUploading.value = false }
+  reader.readAsDataURL(f)
+}
+const dragOverFlag = ref(false)
+const onImageDragOver = (e: DragEvent) => { e.preventDefault(); dragOverFlag.value = true }
+const onImageDragLeave = () => { dragOverFlag.value = false }
+const onImageDrop = (e: DragEvent) => {
+  e.preventDefault()
+  dragOverFlag.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file) uploadImage(file)
 }
 
 // --- Editor dirty / auto-save ---
@@ -732,12 +766,25 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
 
         <!-- 图片库 -->
         <template v-else>
-          <div class="mb-2">
-            <el-button size="small" plain class="w-full text-xs" @click="showImageToolDialog = true; libraryEditImageUri = ''">
+          <div class="flex gap-1 mb-2">
+            <el-button size="small" plain class="flex-1 text-xs" @click="showImageToolDialog = true; libraryEditImageUri = ''">
               <Image class="w-3.5 h-3.5 mr-1" />打开图片工具
             </el-button>
+            <el-button size="small" plain class="flex-1 text-xs" :loading="isUploading" @click="imageUploadInput?.click()">
+              <Upload class="w-3.5 h-3.5 mr-1" />上传图片
+            </el-button>
+            <input ref="imageUploadInput" type="file" accept="image/*" class="hidden" @change="uploadImage()" />
           </div>
-          <div class="space-y-1">
+          <div
+            class="space-y-1 min-h-[100px]"
+            :class="dragOverFlag ? 'ring-2 ring-primary rounded-lg ring-inset bg-primary/5' : ''"
+            @dragover="onImageDragOver"
+            @dragleave="onImageDragLeave"
+            @drop="onImageDrop"
+          >
+            <div v-if="dragOverFlag" class="flex items-center justify-center h-20 text-sm text-primary">
+              释放以上传图片
+            </div>
             <div
               v-for="img in filteredImages" :key="img.id"
               @click="handleImageClick(img)"
@@ -753,7 +800,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
               无匹配图片
             </div>
             <div v-else-if="imageLib.images.value.length === 0" class="text-center text-app-muted py-6 text-sm">
-              暂无图片，使用图片工具生成后保存
+              暂无图片，可上传图片或使用图片工具生成
             </div>
           </div>
         </template>
@@ -1037,7 +1084,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
     <ImageToolDialog
       v-model:visible="showImageToolDialog"
       :library-image-data-uri="libraryEditImageUri"
-      @save-to-library="(uri: string) => { imageLib.saveImage(uri, '未命名图片'); libraryEditImageUri = '' }"
+      @save-to-library="(uri: string) => { imageLib.saveImage(uri, '未命名图片') }"
     />
 
     <PromptDialog

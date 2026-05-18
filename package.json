@@ -1,7 +1,7 @@
 {
   "name": "game_builder",
   "private": true,
-  "version": "2.6.11",
+  "version": "2.6.12",
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {

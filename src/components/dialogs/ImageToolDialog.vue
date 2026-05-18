@@ -3,7 +3,7 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { apiUrl, getErrMsg } from '@/utils/api'
-import { Save, Trash2, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { Save, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -42,8 +42,6 @@ const currentImage = computed(() => images.value[currentIndex.value] || null)
 const hasPrev = computed(() => currentIndex.value > 0)
 const hasNext = computed(() => currentIndex.value < images.value.length - 1)
 
-// Track library edit mode: images loaded from library are kept when "清空" is clicked
-const libraryImageData = ref<ImageItem | null>(null)
 
 // === 修改模式 ===
 const isModifyMode = ref(false)
@@ -52,6 +50,7 @@ const isEditing = ref(false)
 const brushSize = ref(20)
 const isErasing = ref(false)
 const toggleErase = () => { isErasing.value = !isErasing.value }
+const paintedVersion = ref(0)
 
 // Canvas refs
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -101,11 +100,11 @@ const generate = async () => {
       model: selectedModel.value,
     })
     if (r.data.success && r.data.data?.data_uri) {
-      images.value.push({
-        data_uri: r.data.data.data_uri,
-        revised_prompt: r.data.data.revised_prompt,
-      })
+      const newImg = { data_uri: r.data.data.data_uri, revised_prompt: r.data.data.revised_prompt }
+      images.value.push(newImg)
       currentIndex.value = images.value.length - 1
+      // 自动保存到图片库
+      emit2('saveToLibrary', newImg.data_uri)
       ElMessage.success('生图完成')
     } else {
       ElMessage.warning(r.data.message || '生图失败')
@@ -232,14 +231,13 @@ const drawBrush = (e: MouseEvent) => {
   editCtx.beginPath()
   editCtx.arc(x, y, brushSize.value, 0, Math.PI * 2)
   editCtx.fill()
+  paintedVersion.value++
 }
 
 // Watch for library edit: load image and enter modify mode
 watch(() => props2.libraryImageDataUri, (uri) => {
   if (uri) {
-    const libImg: ImageItem = { data_uri: uri, revised_prompt: '' }
-    images.value = [libImg]
-    libraryImageData.value = libImg
+    images.value = [{ data_uri: uri, revised_prompt: '' }]
     currentIndex.value = 0
     if (visible.value) {
       nextTick(() => enterModifyMode())
@@ -250,7 +248,6 @@ watch(visible, (v) => {
   if (!v) {
     isModifyMode.value = false
     enhancedPrompt.value = ''
-    libraryImageData.value = null
   }
 })
 
@@ -262,6 +259,7 @@ const clearMask = () => {
 // Generate mask in the correct format for the edit API:
 
 const paintedPercent = computed(() => {
+  void paintedVersion.value  // trigger reactivity on canvas changes
   const canvas = editCanvasRef.value
   if (!canvas) return 0
   const ctx = canvas.getContext('2d')
@@ -321,11 +319,11 @@ const submitEdit = async () => {
       mask_uri: maskUri,
     })
     if (r.data.success && r.data.data?.data_uri) {
-      images.value.push({
-        data_uri: r.data.data.data_uri,
-        revised_prompt: modifyPrompt.value,
-      })
+      const editImg = { data_uri: r.data.data.data_uri, revised_prompt: modifyPrompt.value }
+      images.value.push(editImg)
       currentIndex.value = images.value.length - 1
+      // 自动保存到图片库
+      emit2('saveToLibrary', editImg.data_uri)
       exitModifyMode()
       ElMessage.success('修改完成')
     } else {
@@ -401,17 +399,8 @@ const submitEdit = async () => {
           <el-button size="small" @click="saveImage">
             <Save class="w-3.5 h-3.5 mr-1" />导出
           </el-button>
-          <el-button size="small" type="success" @click="emit2('saveToLibrary', currentImage?.data_uri || '')">
-            <Save class="w-3.5 h-3.5 mr-1" />保存到图片库
-          </el-button>
           <el-button size="small" type="primary" @click="enterModifyMode">
             修改
-          </el-button>
-          <el-button v-if="!libraryImageData" size="small" type="danger" @click="images = []; currentIndex = 0; isModifyMode = false">
-            <Trash2 class="w-3.5 h-3.5 mr-1" />清空
-          </el-button>
-          <el-button v-else size="small" type="danger" @click="images = [libraryImageData]; currentIndex = 0; exitModifyMode()">
-            <Trash2 class="w-3.5 h-3.5 mr-1" />返回
           </el-button>
         </div>
 
