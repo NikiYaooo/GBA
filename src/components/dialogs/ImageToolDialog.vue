@@ -50,6 +50,8 @@ const isModifyMode = ref(false)
 const modifyPrompt = ref('')
 const isEditing = ref(false)
 const brushSize = ref(20)
+const isErasing = ref(false)
+const toggleErase = () => { isErasing.value = !isErasing.value }
 
 // Canvas refs
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -183,6 +185,7 @@ const initCanvas = () => {
 
 // === Canvas: mouse events for drawing the mask ===
 const onMouseDown = (e: MouseEvent) => {
+  if (e.button === 2) e.preventDefault()
   if (!editCtx || !editCanvasRef.value) return
   isDrawing = true
   const rect = editCanvasRef.value.getBoundingClientRect()
@@ -218,8 +221,14 @@ const drawBrush = (e: MouseEvent) => {
   const x = (e.clientX - rect.left) * scaleX
   const y = (e.clientY - rect.top) * scaleY
 
-  editCtx.globalCompositeOperation = 'source-over'
-  editCtx.fillStyle = 'rgba(255, 0, 0, 0.4)'
+  const erasing = isErasing.value || e.ctrlKey || e.button === 2
+  if (erasing) {
+    editCtx.globalCompositeOperation = 'destination-out'
+    editCtx.fillStyle = 'rgba(0, 0, 0, 1)'
+  } else {
+    editCtx.globalCompositeOperation = 'source-over'
+    editCtx.fillStyle = 'rgba(255, 0, 0, 0.5)'
+  }
   editCtx.beginPath()
   editCtx.arc(x, y, brushSize.value, 0, Math.PI * 2)
   editCtx.fill()
@@ -249,6 +258,24 @@ const clearMask = () => {
   if (!editCtx || !editCanvasRef.value) return
   editCtx.clearRect(0, 0, editCanvasRef.value.width, editCanvasRef.value.height)
 }
+
+// Generate mask in the correct format for the edit API:
+
+const paintedPercent = computed(() => {
+  const canvas = editCanvasRef.value
+  if (!canvas) return 0
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return 0
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+  let painted = 0
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] > 10) painted++
+  }
+  const total = data.length / 4
+  return Math.round((painted / total) * 1000) / 10
+})
+
+const hasMask = computed(() => paintedPercent.value > 0)
 
 // Generate mask in the correct format for the edit API:
 // opaque white = keep, transparent = modify (inverse of display canvas)
@@ -397,20 +424,26 @@ const submitEdit = async () => {
       <!-- Modify mode: canvas with brush -->
       <div v-else class="space-y-3">
         <div class="flex items-center justify-between">
-          <span class="text-sm font-medium">在图片上涂抹要修改的区域</span>
+          <span class="text-sm font-medium">
+            在图片上涂抹要修改的区域（<span class="text-blue-400">左键涂抹</span> / <span class="text-yellow-400">右键/Ctrl 擦除</span>）
+          </span>
           <div class="flex items-center gap-2">
-            <span class="text-xs text-app-muted">画笔大小:</span>
-            <el-slider v-model="brushSize" :min="5" :max="80" class="!w-24" />
+            <el-button
+              size="small"
+              :type="isErasing ? 'warning' : 'default'"
+              @click="toggleErase"
+            >
+              {{ isErasing ? '擦除中' : '橡皮擦' }}
+            </el-button>
+            <span class="text-xs text-app-muted">画笔:</span>
+            <el-slider v-model="brushSize" :min="5" :max="80" class="!w-20" />
             <span class="text-xs text-app-muted w-8">{{ brushSize }}px</span>
           </div>
         </div>
 
         <!-- Canvas stack -->
         <div class="relative border rounded-lg overflow-hidden" :style="canvasContainerStyle">
-          <canvas
-            ref="canvasRef"
-            class="absolute inset-0"
-          />
+          <canvas ref="canvasRef" class="absolute inset-0" />
           <canvas
             ref="editCanvasRef"
             class="absolute inset-0 cursor-crosshair"
@@ -418,11 +451,13 @@ const submitEdit = async () => {
             @mousemove="onMouseMove"
             @mouseup="onMouseUp"
             @mouseleave="onMouseLeave"
+            @contextmenu.prevent
           />
-          <!-- Brush cursor preview circle -->
+          <!-- Brush cursor preview -->
           <div
             v-if="mousePos.x >= 0"
-            class="absolute pointer-events-none rounded-full border-2 border-white"
+            class="absolute pointer-events-none rounded-full border-2"
+            :class="isErasing ? 'border-yellow-400' : 'border-white'"
             :style="{
               width: brushSize * 2 + 'px',
               height: brushSize * 2 + 'px',
@@ -432,17 +467,31 @@ const submitEdit = async () => {
           />
         </div>
 
-        <div class="flex gap-2">
-          <el-button size="small" @click="clearMask">清除涂抹</el-button>
-          <el-input
-            v-model="modifyPrompt"
-            size="small"
-            placeholder="输入修改需求（如：把背景换成森林）"
-            class="flex-1"
-            @keyup.enter="submitEdit"
-          />
-          <el-button size="small" type="primary" :loading="isEditing" @click="submitEdit">确认修改</el-button>
-          <el-button size="small" @click="exitModifyMode">返回</el-button>
+        <!-- Status bar + inputs -->
+        <div class="flex items-center justify-between">
+          <div class="flex gap-2 items-center">
+            <span class="text-xs" :class="hasMask ? 'text-green-500' : 'text-app-muted'">
+              已涂抹 {{ paintedPercent }}% 区域
+            </span>
+            <el-button v-if="hasMask" size="small" text @click="clearMask">清除涂抹</el-button>
+          </div>
+          <div class="flex gap-2 flex-1 ml-4">
+            <el-input
+              v-model="modifyPrompt"
+              size="small"
+              placeholder="输入修改需求（如：把背景换成森林）"
+              class="flex-1"
+              @keyup.enter="submitEdit"
+            />
+            <el-button
+              size="small"
+              type="primary"
+              :loading="isEditing"
+              :disabled="!hasMask || !modifyPrompt.trim()"
+              @click="submitEdit"
+            >确认修改</el-button>
+            <el-button size="small" @click="exitModifyMode">返回</el-button>
+          </div>
         </div>
       </div>
     </div>

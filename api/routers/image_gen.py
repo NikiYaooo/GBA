@@ -5,6 +5,7 @@ import json
 import httpx
 from fastapi import APIRouter, Body
 from typing import Optional
+from PIL import Image
 
 router = APIRouter(tags=["image_gen"])
 
@@ -25,13 +26,291 @@ def _get_config():
 
 IMAGE_MODEL_ENDPOINTS = {
     "GPT-Image 2": "https://api.openai.com/v1/images/generations",
-    "Qwen-Image 2": "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations",
     "Midjourney": "",
     "Google Banana": "",
     "豆包Seedream": "",
     "Stable Diffusion（本地）": "",
 }
-QWEN_EDIT_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/images/edits"
+
+# Qwen-Image 2 — 直接使用 DashScope SDK，无需 URL 映射
+
+QWEN_MODEL = "qwen-image-2.0"
+
+
+async def _qwen_generate(prompt: str, api_key: str, size: str = "1024x1024") -> dict:
+    """通过 DashScope SDK 调用 qwen-image-2.0 生图（异步提交 + 轮询结果）"""
+    from dashscope.aigc.image_synthesis import AioImageSynthesis
+
+    try:
+        response = await AioImageSynthesis.call(
+            model=QWEN_MODEL,
+            prompt=prompt,
+            api_key=api_key,
+            n=1,
+            size=size,
+        )
+    except Exception as e:
+        raise Exception(f"请求异常: {str(e)}")
+
+    if response.status_code != 200:
+        msg = response.message or "未知错误"
+        raise Exception(f"API 错误 ({response.status_code}): {msg}")
+
+    if not response.output:
+        raise Exception("API 返回为空")
+
+    task_status = getattr(response.output, 'task_status', None)
+    if task_status and task_status != 'SUCCEEDED':
+        raise Exception(f"生图任务失败: {task_status}")
+
+    results = getattr(response.output, 'results', [])
+    if not results:
+        raise Exception("生图未返回图片结果")
+
+    url = results[0].url if hasattr(results[0], 'url') else ''
+    if not url:
+        raise Exception("生图结果中无图片 URL")
+
+    return {"url": url, "revised_prompt": prompt}
+
+
+async def _qwen_test_connect(api_key: str) -> bool:
+    """测试 DashScope API Key 是否有效（提交最小任务，不等待完成）"""
+    import httpx
+    import json
+
+    endpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+    }
+    body = {
+        "model": QWEN_MODEL,
+        "input": {"prompt": "test"},
+        "parameters": {"n": 1, "size": "1024x1024"},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(endpoint, json=body, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("output", {}).get("task_id"):
+                    return True
+            detail = ""
+            try:
+                detail = resp.text[:200]
+            except Exception:
+                pass
+            raise Exception(f"连接失败 (HTTP {resp.status_code}) {detail}".strip())
+    except httpx.TimeoutException:
+        raise Exception("连接超时")
+    except Exception as e:
+        if "连接失败" in str(e):
+            raise
+        raise Exception(f"连接异常: {str(e)}")
+
+
+async def _llm_crop_edit(
+    prompt: str,
+    data_uri: str,
+    mask_uri: str,
+    model_name: str,
+    api_key: str,
+    model_configs: dict,
+) -> str:
+    """LLM 增强的裁剪合成方案 — 修复 size 参数 + 改进融合
+
+    流程：
+    1. 解码原图 + mask
+    2. 使用 find_mask_region / compute_crop_region 辅助函数
+    3. PIL 分析图片基本信息（主色调、亮度等）
+    4. 基于分析结果生成增强 prompt
+    5. text2image 生成新内容（修复 size 参数）
+    6. 双阶段高斯羽化合成回原图
+    """
+    import base64 as b64mod
+    import io
+    from PIL import Image, ImageFilter
+
+    # 1. 解码原图
+    _, b64data = data_uri.split(",", 1)
+    orig_img = Image.open(io.BytesIO(b64mod.b64decode(b64data))).convert("RGBA")
+    ow, oh = orig_img.size
+
+    # 2. 解码 mask，找出涂抹区域
+    _, mb64 = mask_uri.split(",", 1)
+    mask_img = Image.open(io.BytesIO(b64mod.b64decode(mb64))).convert("RGBA")
+    if mask_img.size != (ow, oh):
+        mask_img = mask_img.resize((ow, oh), Image.LANCZOS)
+
+    region = find_mask_region(mask_img)
+    if region is None:
+        raise Exception("未检测到涂抹区域，请在图片上涂抹后再提交修改")
+    x1, y1, x2, y2 = region
+
+    # 3. PIL 分析图片基本信息
+    img_info = _analyze_image_basic(orig_img, (x1, y1, x2, y2))
+
+    # 4. 计算裁剪区域（padding 25%）
+    cx1, cy1, cx2, cy2 = compute_crop_region(x1, y1, x2, y2, ow, oh, padding=0.25)
+    cw, ch = cx2 - cx1, cy2 - cy1
+
+    # 5. 生成增强 prompt
+    style_hint = f"主色调: {', '.join(img_info['dominant_colors'])}, 整体亮度: {img_info['brightness']}"
+    gen_prompt = (
+        f"【图片局部编辑任务】\n"
+        f"原始图片特征：{style_hint}\n"
+        f"编辑要求：{prompt}\n"
+        f"请根据编辑要求生成该区域的新内容，确保风格、光照和色调与原始图片保持一致。"
+    )
+
+    # 6. 用 text2image 生成涂抹区域的新内容
+    generated_bytes = None
+    if model_name == "Qwen-Image 2":
+        result = await _qwen_generate(gen_prompt, api_key, size="1024x1024")
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(result["url"])
+            if resp.status_code != 200:
+                raise Exception("下载生成图片失败")
+            generated_bytes = resp.content
+    elif model_name == "豆包Seedream":
+        model_id = (model_configs.get("豆包Seedream") or model_configs.get("豆包", {})).get("modelId", "seedream-2-0")
+        endpoint = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        # 修复：使用 1920x1920 满足最低像素要求 (>= 3686400)
+        body = {"model": model_id, "prompt": gen_prompt, "n": 1, "size": "1920x1920"}
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(endpoint, json=body, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                b64 = data.get("data", [{}])[0].get("b64_json", "") or ""
+                if b64:
+                    generated_bytes = b64mod.b64decode(b64)
+                else:
+                    url = data.get("data", [{}])[0].get("url", "")
+                    if url:
+                        img_resp = await client.get(url, timeout=30)
+                        if img_resp.status_code == 200:
+                            generated_bytes = img_resp.content
+            if not generated_bytes:
+                detail = ""
+                try:
+                    detail = resp.text[:200]
+                except Exception:
+                    pass
+                raise Exception(f"生成失败 (HTTP {resp.status_code}) {detail}".strip())
+    else:
+        raise Exception(f"{model_name} 不支持此编辑方式")
+
+    # 7. 将生成结果 resize 到裁剪区域大小
+    gen_img = Image.open(io.BytesIO(generated_bytes)).convert("RGBA")
+    gen_img = gen_img.resize((cw, ch), Image.LANCZOS)
+
+    # 8. 创建羽化合成 mask
+    edit_region = mask_img.crop((cx1, cy1, cx2, cy2))
+    composite = Image.new("L", (cw, ch), 0)
+    cp = composite.load()
+    ep = edit_region.load()
+    for y in range(ch):
+        for x in range(cw):
+            a = ep[x, y][3]
+            if a < 250:
+                cp[x, y] = 255
+            elif a < 255:
+                cp[x, y] = max(0, 255 - a)
+
+    # 改进：双阶段高斯羽化
+    feather_coarse = max(10, (cx2 - cx1) // 20)
+    feather_fine = max(3, feather_coarse // 3)
+    composite = composite.filter(ImageFilter.GaussianBlur(radius=feather_coarse))
+    composite = composite.filter(ImageFilter.GaussianBlur(radius=feather_fine))
+
+    # 9. 合成回原图
+    result = orig_img.copy()
+    result.paste(gen_img, (cx1, cy1), composite)
+
+    # 10. 转为 base64
+    buf = io.BytesIO()
+    result.save(buf, format="PNG")
+    return f"data:image/png;base64,{b64mod.b64encode(buf.getvalue()).decode('utf-8')}"
+
+
+async def _native_edit_ark(
+    prompt: str,
+    data_uri: str,
+    mask_uri: str,
+    api_key: str,
+    model_id: str,
+) -> str:
+    """通过 ARK /api/v3/images/edits 调用豆包 Seedream 原生图片编辑
+
+    参数：
+        prompt: 修改需求
+        data_uri: 原图 data URI
+        mask_uri: mask data URI（白=保留，透明=修改）
+        api_key: ARK API Key
+        model_id: 模型 ID（如 seedream-3-0）
+    返回：
+        编辑后的 data URI
+    """
+    import base64 as b64mod
+    import io
+    from PIL import Image as PILImage
+
+    # 1. 解析原图和 mask
+    _, img_b64 = data_uri.split(",", 1)
+    img_bytes = b64mod.b64decode(img_b64)
+    _, mask_b64 = mask_uri.split(",", 1)
+    mask_bytes = b64mod.b64decode(mask_b64)
+
+    # 2. 对齐 mask 尺寸到原图
+    img_pil = PILImage.open(io.BytesIO(img_bytes))
+    mask_pil = PILImage.open(io.BytesIO(mask_bytes)).convert("RGBA")
+    if mask_pil.size != img_pil.size:
+        mask_pil = mask_pil.resize(img_pil.size, PILImage.LANCZOS)
+
+    mask_buf = io.BytesIO()
+    mask_pil.save(mask_buf, format="PNG")
+    mask_bytes_aligned = mask_buf.getvalue()
+
+    # 3. 准备 multipart 请求
+    size_str = f"{img_pil.width}x{img_pil.height}"
+
+    endpoint = "https://ark.cn-beijing.volces.com/api/v3/images/edits"
+    files = {
+        "image": ("image.png", img_bytes, "image/png"),
+        "mask": ("mask.png", mask_bytes_aligned, "image/png"),
+        "prompt": (None, prompt),
+        "n": (None, "1"),
+        "size": (None, size_str),
+        "model": (None, model_id),
+    }
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        resp = await client.post(endpoint, files=files, headers=headers)
+        if resp.status_code != 200:
+            detail = ""
+            try:
+                detail = resp.text[:300]
+            except Exception:
+                pass
+            raise Exception(f"原生编辑失败 (HTTP {resp.status_code}) {detail}".strip())
+
+        data = resp.json()
+        b64_json = data.get("data", [{}])[0].get("b64_json", "")
+        if b64_json:
+            return f"data:image/png;base64,{b64_json}"
+
+        url = data.get("data", [{}])[0].get("url", "")
+        if url:
+            img_resp = await client.get(url, timeout=30)
+            if img_resp.status_code == 200:
+                result_b64 = b64mod.b64encode(img_resp.content).decode("utf-8")
+                return f"data:image/png;base64,{result_b64}"
+
+        raise Exception("原生编辑返回中无图片数据")
 
 
 @router.post("/api/image/enhance-prompt")
@@ -179,51 +458,30 @@ async def generate_image(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
-    # Qwen-Image 2（通义万相）— OpenAI 兼容模式
+    # Qwen-Image 2 — 使用 DashScope SDK（异步任务 + OSS 结果）
     if model_name == "Qwen-Image 2":
         cfg = model_configs.get("Qwen-Image 2", {})
         api_key = cfg.get("apiKey", "")
         if not api_key:
             return {"success": False, "message": "Qwen-Image 2 未配置 API Key，请先在设置中配置"}
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": "qwen-image-2.0",
-            "prompt": prompt,
-            "n": 1,
-            "size": "1024x1024",
-        }
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(IMAGE_MODEL_ENDPOINTS["Qwen-Image 2"], json=body, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    items = data.get("data", [])
-                    if items:
-                        b64 = items[0].get("b64_json", "")
-                        if b64:
-                            if not b64.startswith("data:"):
-                                b64 = f"data:image/png;base64,{b64}"
-                            revised = items[0].get("revised_prompt", prompt)
-                            return {"success": True, "data": {"data_uri": b64, "revised_prompt": revised}}
-                        url = items[0].get("url", "")
-                        if url:
-                            img_resp = await client.get(url, timeout=30)
-                            if img_resp.status_code == 200:
-                                import base64
-                                b64 = base64.b64encode(img_resp.content).decode("utf-8")
-                                return {"success": True, "data": {"data_uri": f"data:image/png;base64,{b64}", "revised_prompt": items[0].get("revised_prompt", prompt)}}
-                    return {"success": False, "message": "生图未返回图片结果"}
-                detail = ""
-                try: detail = resp.text[:300]
-                except: pass
-                return {"success": False, "message": f"生图失败 (HTTP {resp.status_code}) {detail}".strip()}
-        except httpx.TimeoutException:
-            return {"success": False, "message": "生图请求超时"}
+            result = await _qwen_generate(prompt, api_key)
+            # Download image from URL and convert to base64
+            async with httpx.AsyncClient(timeout=30) as client:
+                img_resp = await client.get(result["url"])
+                if img_resp.status_code == 200:
+                    import base64
+                    b64 = base64.b64encode(img_resp.content).decode("utf-8")
+                    return {
+                        "success": True,
+                        "data": {
+                            "data_uri": f"data:image/png;base64,{b64}",
+                            "revised_prompt": result["revised_prompt"],
+                        }
+                    }
+                return {"success": False, "message": "下载生成图片失败"}
         except Exception as e:
-            return {"success": False, "message": f"请求异常: {str(e)}"}
+            return {"success": False, "message": str(e)}
 
     # Stable Diffusion（本地）
     if model_name == "Stable Diffusion（本地）":
@@ -306,24 +564,11 @@ async def test_image_model(payload: dict = Body(...)):
     if model_name == "Qwen-Image 2":
         if not api_key:
             return {"success": False, "message": "缺少 API Key"}
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        body = {
-            "model": "qwen-image-2.0",
-            "prompt": "test",
-            "n": 1,
-            "size": "1024x1024",
-        }
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(IMAGE_MODEL_ENDPOINTS["Qwen-Image 2"], json=body, headers=headers)
-                if resp.status_code == 200:
-                    return {"success": True, "message": "连接成功"}
-                detail = ""
-                try: detail = resp.text[:200]
-                except: pass
-                return {"success": False, "message": f"连接失败 (HTTP {resp.status_code}) {detail}".strip()}
+            await _qwen_test_connect(api_key)
+            return {"success": True, "message": "连接成功"}
         except Exception as e:
-            return {"success": False, "message": f"连接异常: {str(e)}"}
+            return {"success": False, "message": str(e)}
 
     if model_name == "Stable Diffusion（本地）":
         base_url = (model_id or "http://127.0.0.1:7860").rstrip("/")
@@ -338,6 +583,80 @@ async def test_image_model(payload: dict = Body(...)):
 
     # Midjourney / Google Banana
     return {"success": False, "message": f"{model_name} 暂不支持连接测试"}
+
+
+# ========== 图片编辑辅助函数 ==========
+
+def _analyze_image_basic(img: Image.Image, mask_region: tuple) -> dict:
+    """分析图片基本信息用于 prompt 增强
+
+    返回：
+        dict 包含：dominant_colors, brightness, region_ratio
+    """
+    from collections import Counter
+
+    # 转 RGB 缩略图加速
+    thumb = img.copy()
+    thumb.thumbnail((64, 64))
+    thumb_rgb = thumb.convert("RGB")
+
+    # 提取主色调（降采样到 32 级每通道后取 top 3）
+    pixels = list(thumb_rgb.getdata())
+    quantized = [(r // 32 * 32, g // 32 * 32, b // 32 * 32) for r, g, b in pixels]
+    top3 = [f"rgb{c}" for c, _ in Counter(quantized).most_common(3)]
+
+    # 平均亮度
+    gray = thumb_rgb.convert("L")
+    avg_brightness = sum(gray.getdata()) / len(list(gray.getdata()))
+
+    # 涂抹区域占比
+    x1, y1, x2, y2 = mask_region
+    mask_area = (x2 - x1 + 1) * (y2 - y1 + 1)
+    total_area = img.width * img.height
+    region_ratio = mask_area / total_area
+
+    return {
+        "dominant_colors": top3,
+        "brightness": "bright" if avg_brightness > 170 else "dark" if avg_brightness < 85 else "medium",
+        "region_ratio": round(region_ratio, 3),
+    }
+
+
+def find_mask_region(mask_img: Image.Image, alpha_threshold: int = 250) -> tuple | None:
+    """从 mask 图片中找出涂抹区域（alpha < threshold 的像素范围）
+
+    参数：
+        mask_img: RGBA 模式的 PIL Image
+        alpha_threshold: alpha 低于此值视为涂抹区域
+    返回：
+        (x1, y1, x2, y2) 或 None（未检测到涂抹）
+    """
+    w, h = mask_img.size
+    mpx = mask_img.load()
+    x1, y1, x2, y2 = w, h, 0, 0
+    found = False
+    for y in range(h):
+        for x in range(w):
+            if mpx[x, y][3] < alpha_threshold:
+                found = True
+                if x < x1: x1 = x
+                if y < y1: y1 = y
+                if x > x2: x2 = x
+                if y > y2: y2 = y
+    if not found:
+        return None
+    return (x1, y1, x2, y2)
+
+
+def compute_crop_region(x1: int, y1: int, x2: int, y2: int, img_w: int, img_h: int, padding: float = 0.25) -> tuple[int, int, int, int]:
+    """根据涂抹区域计算四周 padding 后的裁剪范围"""
+    ew, eh = x2 - x1 + 1, y2 - y1 + 1
+    pad = int(max(20, min(ew, eh) * padding))
+    cx1 = max(0, x1 - pad)
+    cy1 = max(0, y1 - pad)
+    cx2 = min(img_w, x2 + pad)
+    cy2 = min(img_h, y2 + pad)
+    return (cx1, cy1, cx2, cy2)
 
 
 @router.post("/api/image/edit")
@@ -431,123 +750,37 @@ async def edit_image(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
-    # 豆包Seedream 修改
+    # 豆包Seedream 修改 — 优先原生编辑，回退 Crop-Edit
     if model_name == "豆包Seedream":
         cfg = model_configs.get("豆包Seedream") or model_configs.get("豆包", {})
         api_key = cfg.get("apiKey", "")
         if not api_key:
             return {"success": False, "message": "豆包Seedream 未配置 API Key"}
-        import base64 as b64mod
-        header, b64data = data_uri.split(",", 1)
-        img_bytes = b64mod.b64decode(b64data)
-        files = {
-            "image": ("image.png", img_bytes, "image/png"),
-            "prompt": (None, prompt),
-            "n": (None, "1"),
-            "size": (None, "1920x1920"),
-        }
-        if mask_uri:
-            mask_header, mask_b64 = mask_uri.split(",", 1)
-            mask_bytes = b64mod.b64decode(mask_b64)
-            files["mask"] = ("mask.png", mask_bytes, "image/png")
+        model_id = cfg.get("modelId", "seedream-2-0")
+        # 优先原生编辑
         try:
-            async with httpx.AsyncClient(timeout=180) as client:
-                resp = await client.post(
-                    "https://ark.cn-beijing.volces.com/api/v3/images/edits",
-                    files=files,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-                # 如果 edits 端点不存在（404），说明该模型不支持局部修改
-                if resp.status_code == 404:
-                    return {"success": False, "message": "豆包Seedream 不支持局部修改功能。请使用 GPT-Image 2（DALL-E）进行涂抹修改"}
-                if resp.status_code == 200:
-                    data = resp.json()
-                    b64 = data.get("data", [{}])[0].get("b64_json", "") or ""
-                    if not b64:
-                        url = data.get("data", [{}])[0].get("url", "")
-                        if url:
-                            img_resp = await client.get(url, timeout=30)
-                            if img_resp.status_code == 200:
-                                b64 = b64mod.b64encode(img_resp.content).decode("utf-8")
-                    if b64:
-                        return {"success": True, "data": {"data_uri": f"data:image/png;base64,{b64}"}}
-                detail = ""
-                try: detail = resp.text[:200]
-                except: pass
-                return {"success": False, "message": f"修改失败 (HTTP {resp.status_code}) {detail}".strip()}
+            data_uri_result = await _native_edit_ark(prompt, data_uri, mask_uri, api_key, model_id)
+            return {"success": True, "data": {"data_uri": data_uri_result}}
         except Exception as e:
-            return {"success": False, "message": f"请求异常: {str(e)}"}
+            import logging
+            logging.getLogger(__name__).warning(f"豆包原生编辑失败，回退 Crop-Edit: {e}")
+            # 回退到 LLM 增强 Crop-Edit
+            try:
+                data_uri_result = await _llm_crop_edit(prompt, data_uri, mask_uri, model_name, api_key, model_configs)
+                return {"success": True, "data": {"data_uri": data_uri_result}}
+            except Exception as e2:
+                return {"success": False, "message": str(e2)}
 
-    # Qwen-Image 2 修改 — OpenAI 兼容模式
+    # Qwen-Image 2 修改 — 使用裁剪合成方案（crop→generate→composite）
     if model_name == "Qwen-Image 2":
         cfg = model_configs.get("Qwen-Image 2", {})
         api_key = cfg.get("apiKey", "")
         if not api_key:
             return {"success": False, "message": "Qwen-Image 2 未配置 API Key"}
-        import base64 as b64mod
-        from PIL import Image as PILImg
-        import io
-        header, b64data = data_uri.split(",", 1)
-        img_bytes = b64mod.b64decode(b64data)
-        # 转换 mask：前端格式（不透明白=保留，透明=修改）→ Qwen格式（白=修改，黑=保留）
-        mask_bytes_ready = b""
-        if mask_uri:
-            try:
-                m_header, m_b64 = mask_uri.split(",", 1)
-                mb = b64mod.b64decode(m_b64)
-                mask_pil = PILImg.open(io.BytesIO(mb)).convert("RGBA")
-                orig_pil = PILImg.open(io.BytesIO(img_bytes))
-                if mask_pil.size != orig_pil.size:
-                    mask_pil = mask_pil.resize(orig_pil.size, PILImg.NEAREST)
-                # Invert: transparent (alpha < 250) → white (edit), opaque → black (keep)
-                qwen_mask = PILImg.new("RGB", mask_pil.size, (0, 0, 0))
-                pixels = mask_pil.load()
-                qw_pixels = qwen_mask.load()
-                w, h = mask_pil.size
-                for y in range(h):
-                    for x in range(w):
-                        if pixels[x, y][3] < 250:
-                            qw_pixels[x, y] = (255, 255, 255)
-                mask_buf = io.BytesIO()
-                qwen_mask.save(mask_buf, format="PNG")
-                mask_bytes_ready = mask_buf.getvalue()
-            except Exception:
-                mask_bytes_ready = b""
         try:
-            async with httpx.AsyncClient(timeout=180) as client:
-                files = {
-                    "image": ("image.png", img_bytes, "image/png"),
-                    "prompt": (None, prompt),
-                    "n": (None, "1"),
-                    "size": (None, "1024x1024"),
-                }
-                if mask_bytes_ready:
-                    files["mask"] = ("mask.png", mask_bytes_ready, "image/png")
-                headers = {"Authorization": f"Bearer {api_key}"}
-                resp = await client.post(QWEN_EDIT_ENDPOINT, files=files, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    items = data.get("data", [])
-                    if items:
-                        b64 = items[0].get("b64_json", "")
-                        if b64:
-                            if not b64.startswith("data:"):
-                                b64 = f"data:image/png;base64,{b64}"
-                            return {"success": True, "data": {"data_uri": b64}}
-                        url = items[0].get("url", "")
-                        if url:
-                            img_resp = await client.get(url, timeout=30)
-                            if img_resp.status_code == 200:
-                                b64 = b64mod.b64encode(img_resp.content).decode("utf-8")
-                                return {"success": True, "data": {"data_uri": f"data:image/png;base64,{b64}"}}
-                    return {"success": False, "message": "修改未返回图片结果"}
-                detail = ""
-                try: detail = resp.text[:300]
-                except: pass
-                return {"success": False, "message": f"修改失败 (HTTP {resp.status_code}) {detail}".strip()}
-        except httpx.TimeoutException:
-            return {"success": False, "message": "修改请求超时"}
+            data_uri_result = await _llm_crop_edit(prompt, data_uri, mask_uri, model_name, api_key, model_configs)
+            return {"success": True, "data": {"data_uri": data_uri_result}}
         except Exception as e:
-            return {"success": False, "message": f"请求异常: {str(e)}"}
+            return {"success": False, "message": str(e)}
 
     return {"success": False, "message": f"{model_name} 修改功能暂未实现"}

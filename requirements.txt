@@ -13,3 +13,6 @@ requests
 sentence-transformers
 rank_bm25
 jieba
+dashscope
+pytest-asyncio
+Pillow
