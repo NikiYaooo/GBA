@@ -468,8 +468,24 @@ const handleDrop = async (e: DragEvent) => {
   const file = e.dataTransfer?.files[0]
   if (!file) return
   const ext = file.name.split('.').pop()?.toLowerCase()
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']
+  if (imageExts.includes(ext || '') || file.type.startsWith('image/')) {
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const dataUri = reader.result as string
+      try {
+        await imageLib.saveImage(dataUri, file.name.replace(/\.[^.]+$/, '') || '未命名图片')
+        ElMessage.success('图片已上传')
+        await switchCategory('image')
+      } catch (e: any) {
+        ElMessage.error('上传失败: ' + getErrMsg(e))
+      }
+    }
+    reader.readAsDataURL(file)
+    return
+  }
   if (!['docx', 'md', 'txt', 'xlsx', 'xls'].includes(ext || '')) {
-    ElMessage.warning('仅支持 docx, md, txt, xlsx'); return
+    ElMessage.warning('仅支持 docx, md, txt, xlsx 及图片格式'); return
   }
   await uploadFile(file)
 }
@@ -491,8 +507,27 @@ const uploadFile = async (file: File) => {
 const handleUpload = () => {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.docx,.md,.txt,.xlsx,.xls'
-  input.onchange = async (e: any) => { if (e.target.files[0]) await uploadFile(e.target.files[0]) }
+  if (activeCategory.value === 'image') {
+    input.accept = 'image/*'
+    input.onchange = async (e: any) => {
+      const file = e.target.files[0]
+      if (!file) return
+      const reader = new FileReader()
+      reader.onload = async () => {
+        const dataUri = reader.result as string
+        try {
+          await imageLib.saveImage(dataUri, file.name.replace(/\.[^.]+$/, '') || '未命名图片')
+          ElMessage.success('已上传')
+        } catch (e: any) {
+          ElMessage.error('上传失败: ' + getErrMsg(e))
+        }
+      }
+      reader.readAsDataURL(file)
+    }
+  } else {
+    input.accept = '.docx,.md,.txt,.xlsx,.xls'
+    input.onchange = async (e: any) => { if (e.target.files[0]) await uploadFile(e.target.files[0]) }
+  }
   input.click()
 }
 
@@ -724,7 +759,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       <div class="p-4 border-b border-app-light">
         <div class="flex items-center gap-1 mb-3">
           <h2 class="font-bold text-lg flex items-center gap-2 flex-1"><FolderOpen class="w-5 h-5 text-app-primary" />文档</h2>
-          <el-button v-if="activeCategory !== 'image'" type="primary" size="small" plain @click="handleUpload"><template #icon><Upload class="w-4 h-4" /></template>上传</el-button>
+          <el-button type="primary" size="small" plain @click="handleUpload"><template #icon><Upload class="w-4 h-4" /></template>上传</el-button>
           <el-button v-if="activeCategory !== 'image'" link @click="kb.openKB()"><Database class="w-4 h-4 text-app-muted" /></el-button>
           <el-button link @click="openSettings"><Settings class="w-4 h-4 text-app-muted" /></el-button>
         </div>

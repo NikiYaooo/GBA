@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ModelConfig, Profession, PromptTemplate } from '@/types'
 import { Trash2, Plus, Image } from 'lucide-vue-next'
+import { ElMessage } from 'element-plus'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -212,14 +213,14 @@ const setImageModelConfig = (name: string, key: string, value: string) => {
             <label class="text-sm font-semibold text-app block mb-2">选择职业</label>
             <el-select
               :model-value="selectedImitationProfession" size="default" class="w-full"
-              @change="(val: string) => emit('onProfessionChange', val)"
+              @change="(val: string) => { const p = props.professionsFull.find(p => p.id === val); if (p && (p.id === 'developer' || p.id === 'tester')) { ElMessage.info('功能开发中'); return } emit('onProfessionChange', val) }"
             >
               <el-option v-for="p in professionsFull" :key="p.id" :label="p.name" :value="p.id" />
             </el-select>
           </div>
           <template v-if="selectedImitationProfession">
             <h3 class="text-sm font-semibold text-app mb-3">
-              {{ currentProfession()?.name }} - 仿写指令
+              {{ currentProfession()?.name }}{{ currentProfession()?.id === 'designer' ? '' : ' - 仿写指令' }}
             </h3>
             <p class="text-xs text-app-muted mb-3">默认 Prompt 为内置不可编辑。可新增自定义 Prompt，自定义 Prompt 可删除。</p>
             <div v-if="(customPrompts() || []).length > 0" class="space-y-3 max-h-[200px] overflow-y-auto mb-4">
@@ -242,7 +243,7 @@ const setImageModelConfig = (name: string, key: string, value: string) => {
             <!-- 新增仿写 Prompt -->
             <div class="border border-dashed border-app rounded-lg p-3 mb-4">
               <h4 class="text-sm font-medium text-app mb-2 flex items-center gap-1">
-                <Plus class="w-3.5 h-3.5" /> 新增自定义仿写 Prompt
+                <Plus class="w-3.5 h-3.5" /> {{ currentProfession()?.id === 'designer' ? '新增自定义 Prompt' : '新增自定义仿写 Prompt' }}
               </h4>
               <div class="space-y-2">
                 <el-input
@@ -251,7 +252,7 @@ const setImageModelConfig = (name: string, key: string, value: string) => {
                 />
                 <el-input
                   :model-value="newPromptContent" type="textarea" :rows="3" size="small"
-                  placeholder="请输入仿写 Prompt 内容"
+                  :placeholder="currentProfession()?.id === 'designer' ? '请输入 Prompt 内容' : '请输入仿写 Prompt 内容'"
                   @update:model-value="(v: string) => emit('update:newPromptContent', v)"
                 />
                 <div class="flex justify-end">
@@ -263,7 +264,7 @@ const setImageModelConfig = (name: string, key: string, value: string) => {
             </div>
 
             <!-- 文档质检 Prompt -->
-            <div class="border border-app rounded-lg p-3">
+            <div v-if="currentProfession()?.id !== 'designer'" class="border border-app rounded-lg p-3">
               <h4 class="text-sm font-medium text-app mb-2">文档质检 Prompt</h4>
               <p class="text-xs text-app-muted mb-2">自定义该职业的文档质检提示词，右键文档 →「文档质检」时将使用此 Prompt</p>
               <el-input
