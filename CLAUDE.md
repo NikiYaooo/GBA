@@ -49,3 +49,55 @@ Skills 位于 `.claude/skills/` 目录，每个 skill 有独立的 `SKILL.md` �
 1. **版本号规则** — 版本号格式为 `大版本.小版本.bug修复`（例如 `1.1.5` 表示第1个大版本、第1个小版本、第5个bug修复版本）。每次开发完成时自动迭代版本号。
 2. **自动编译** — 每次开发完成后自动执行编译/构建。
 3. **自动推送** — 每个小版本迭代开发完成、编译通过后，自动将代码 push 到 GitHub (`git@github.com:NikiYaooo/GBA.git`)。
+4. **中文输出** — 每次对话都用中文回答，权限询问也帮我翻译为中文。
+
+# Codebase Overview
+
+## Architecture
+
+Electron desktop app with Vue 3 frontend (renderer) communicating via HTTP to a Python FastAPI backend (spawned as child process):
+
+```
+Electron main.ts → spawns Python api/main.py (port 8000)
+         ↓                     ↕ HTTP (Axios)
+Vue 3 SPA (renderer)     FastAPI routers/
+  ↕ IPC (electronAPI)         ai_service.py
+Electron main process         kb_project.py (RAG)
+  (file dialogs, SVN,         document_parser.py
+   auto-start, etc.)          knowledge_base.py
+```
+
+## Key Directories
+
+| Directory | Purpose |
+|---|---|
+| `api/` | Python FastAPI backend — routers/, ai_service.py, kb_project.py, knowledge_base.py |
+| `src/` | Vue 3 frontend — pages/HomePage.vue (SPA), components/dialogs/, composables/, utils/ |
+| `electron/` | Electron main.ts (Python lifecycle, IPC handlers) + preload.ts |
+| `tests/` | Python pytest tests for KBProject (29 tests) |
+| `data/` | Runtime data (config.json, KB data, uploads) |
+
+## Commands
+
+**Type check:** `npm run check` (vue-tsc -b)
+**Full build:** `npm run build` → vue-tsc → vite → electron-builder (output: release28/)
+**Vite only:** `npx vite build` (skip type check)
+**Python tests (from root):** `.venv\Scripts\python.exe -m pytest tests/ -v`
+**Dev mode:** `npm run dev` (Vite hot-reload, Electron main.ts loads VITE_DEV_SERVER_URL)
+**Start backend alone:** `.venv\Scripts\python.exe api/main.py`
+
+## Build Details
+
+- `electron-builder` config in `package.json` → `build` section
+- Output: `release28/游戏策划AI文档助手.exe` (Win portable)
+- Bundles: `dist/`, `dist-electron/`, `api/` (as `resources/api/`)
+- Electron version: 27.3.11
+
+## Architecture Notes
+
+- **Single page app:** All UI is in `src/pages/HomePage.vue` (66KB), dialogs are modular in `src/components/dialogs/` (16 dialogs)
+- **Backend port:** Default 8000, configurable via `GB_PORT` env var
+- **Frontend → Backend discovery:** tries IPC URL first, then scans ports 8000-8010
+- **No frontend tests** — only Python backend pytest tests exist
+- **Venv:** `.venv\Scripts\python.exe` — must have `pip install -r requirements.txt` for builds
+- **Version scheme:** `major.minor.bugfix` (currently 2.6.10), bump on each release build

@@ -301,6 +301,21 @@ async def delete_document(project_id: str, doc_id: str):
     return result
 
 
+@router.delete("/project/{project_id}/documents")
+async def clear_documents(project_id: str, folder_id: str = None):
+    """批量删除项目下所有文档，可选按 folder_id 过滤。"""
+    proj = get_kb().get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    docs = proj.get_documents(folder_id=folder_id or None)
+    deleted = 0
+    for doc in docs:
+        result = proj.delete_document(doc["id"])
+        if result.get("success"):
+            deleted += 1
+    return {"success": True, "data": {"deleted": deleted, "total": len(docs)}}
+
+
 @router.post("/project/{project_id}/doc/{doc_id}/revectorize")
 async def revectorize_document(project_id: str, doc_id: str):
     proj = get_kb().get_project(project_id)

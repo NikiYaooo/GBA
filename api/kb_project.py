@@ -529,12 +529,12 @@ class KBProject:
 
         file_hash = doc.get("file_hash", "")
 
-        # 从文档列表移除
-        self.documents = [d for d in self.documents if d["id"] != doc_id]
-
-        # 删除对应的块
+        # 先删除对应的块（必须在移除文档前调用，_remove_doc_vectors 需要查找 doc）
         if file_hash:
             self._remove_doc_vectors(file_hash)
+
+        # 从文档列表移除
+        self.documents = [d for d in self.documents if d["id"] != doc_id]
 
         # 删除 raw_docs 中的文件
         raw_path = doc.get("raw_path", "")

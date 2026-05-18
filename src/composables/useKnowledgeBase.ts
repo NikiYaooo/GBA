@@ -4,25 +4,6 @@ import { ElMessage } from 'element-plus'
 import { apiUrl, getErrMsg } from '@/utils/api'
 import type { KBStats, ApiResponse, KBProject, KBFolder, KBDocumentV2, KBSearchResult, KBBackup } from '@/types'
 
-export interface ScannedFile {
-  name: string
-  path: string
-  size: number
-  ext: string
-}
-
-export interface ImportProgress {
-  status: 'pending' | 'scanning' | 'importing' | 'paused' | 'done' | 'error' | 'cancelled'
-  progress: number
-  message: string
-  total_files: number
-  processed_files: number
-  current_file: string
-  succeeded_files?: number
-  skipped_files?: number
-  skip_reasons?: Record<string, number>
-}
-
 export function useKnowledgeBase() {
   // === 对话框状态 ===
   const showKB = ref(false)
@@ -40,6 +21,12 @@ export function useKnowledgeBase() {
   const vocabList = ref<string[]>([])
   const chunkSizeMin = ref(100)
   const chunkSizeMax = ref(500)
+
+  // === 上传进度 ===
+  const uploadProgress = ref(0)
+  const uploadFileName = ref('')
+  const uploadTotalFiles = ref(0)
+  const uploadCurrentFile = ref(0)
 
   // === 加载状态 ===
   const loading = ref(false)
@@ -103,7 +90,18 @@ export function useKnowledgeBase() {
       const r = await axios.post(apiUrl(`/api/kb/project/${id}/activate`))
       if (r.data.success) {
         activeProjectId.value = id
-        await Promise.all([loadFolders(), loadDocuments(), loadStats()])
+        await Promise.all([loadFolders(), loadDocuments(), loadStats(), loadChunkSize()])
+      }
+    } catch { /* */ }
+  }
+
+  const loadChunkSize = async () => {
+    if (!activeProjectId.value) return
+    try {
+      const r = await axios.get(apiUrl(`/api/kb/project/${activeProjectId.value}/config`))
+      if (r.data.success && r.data.data) {
+        if (r.data.data.chunk_size_min != null) chunkSizeMin.value = r.data.data.chunk_size_min
+        if (r.data.data.chunk_size_max != null) chunkSizeMax.value = r.data.data.chunk_size_max
       }
     } catch { /* */ }
   }
@@ -158,20 +156,33 @@ export function useKnowledgeBase() {
     } catch { documents.value = [] }
   }
 
-  const uploadFile = async (file: File, folderId?: string) => {
+  const uploadFile = async (file: File, folderId?: string, fileIndex?: number, totalFiles?: number) => {
     isUploadingKB.value = true
+    uploadFileName.value = file.name
+    uploadCurrentFile.value = fileIndex ?? 0
+    uploadTotalFiles.value = totalFiles ?? 1
+    uploadProgress.value = 0
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/octet-stream',
         'X-Filename': encodeURIComponent(file.name),
       }
       if (folderId) headers['X-Folder-Id'] = folderId
-      const r = await axios.post(apiUrl(`/api/kb/project/${activeProjectId.value}/upload`), file, { headers, timeout: 120000 })
+      const r = await axios.post(apiUrl(`/api/kb/project/${activeProjectId.value}/upload`), file, {
+        headers, timeout: 120000,
+        onUploadProgress: (e) => {
+          uploadProgress.value = Math.round((e.loaded / (e.total || file.size)) * 100)
+        },
+      })
       if (r.data.success) { await loadDocuments(activeFolderFilter.value || undefined); return true }
       ElMessage.warning(r.data.message || '上传失败')
       return false
     } catch (e: any) { ElMessage.error('上传失败: ' + getErrMsg(e)); return false }
-    finally { isUploadingKB.value = false }
+    finally {
+      isUploadingKB.value = false
+      uploadProgress.value = 0
+      uploadFileName.value = ''
+    }
   }
 
   const updateDocument = async (docId: string, updates: Record<string, any>) => {
@@ -186,16 +197,18 @@ export function useKnowledgeBase() {
   const deleteDocument = async (docId: string) => {
     if (!activeProjectId.value) return
     await axios.delete(apiUrl(`/api/kb/project/${activeProjectId.value}/doc/${docId}`))
-    await loadDocuments(activeFolderFilter.value || undefined)
+    await Promise.all([loadDocuments(activeFolderFilter.value || undefined), loadStats()])
   }
 
-  const clearAll = async () => {
-    // v2.6.2: clear all docs in active project
+  const clearAll = async (folderId?: string) => {
     if (!activeProjectId.value) return
-    for (const d of documents.value) {
-      await axios.delete(apiUrl(`/api/kb/project/${activeProjectId.value}/doc/${d.id}`))
-    }
-    await loadDocuments()
+    const params = folderId ? `?folder_id=${folderId}` : ''
+    try {
+      const r = await axios.delete(apiUrl(`/api/kb/project/${activeProjectId.value}/documents${params}`))
+      if (r.data.success) {
+        await Promise.all([loadDocuments(activeFolderFilter.value || undefined), loadStats(), loadProjects()])
+      }
+    } catch { /* */ }
   }
 
   // ========== 检索 ==========
@@ -319,32 +332,10 @@ export function useKnowledgeBase() {
       loadFolders()
       loadDocuments()
       loadStats()
+      loadChunkSize()
     })
   }
 
-  // ========== 兼容旧接口属性 ==========
-
-  const folderPath = ref('')
-  const scannedFiles = ref<any[]>([])
-  const selectedFiles = ref<Set<string>>(new Set())
-  const isScanning = ref(false)
-  const importProgress = ref<any>(null)
-  const isImporting = ref(false)
-  const isPaused = ref(false)
-
-  const scanFolder = async () => { /* no-op in v2.6.2 */ }
-  const importFolder = async () => { /* no-op in v2.6.2 */ }
-  const toggleFile = (path: string) => { /* no-op */ }
-  const selectAllFiles = () => { /* no-op */ }
-  const deselectAllFiles = () => { /* no-op */ }
-  const selectFilesByType = (ext: string) => { /* no-op */ }
-  const deselectFilesByType = (ext: string) => { /* no-op */ }
-  const toggleFilesByType = (ext: string) => { /* no-op */ }
-  const pauseImport = async () => { /* no-op */ }
-  const resumeImport = async () => { /* no-op */ }
-  const stopImport = async () => { /* no-op */ }
-  const resetFolderImport = () => { /* no-op */ }
-  const stopPolling = () => { /* no-op */ }
   const saveChunkSize = async (_min: number, _max: number) => {
     if (!activeProjectId.value) return false
     try {
@@ -393,6 +384,9 @@ export function useKnowledgeBase() {
     // 文档
     loadDocuments, uploadFile, updateDocument, deleteDocument, clearAll,
 
+    // 上传进度
+    uploadProgress, uploadFileName, uploadTotalFiles, uploadCurrentFile,
+
     // 检索
     search, fuzzySearch,
 
@@ -402,13 +396,10 @@ export function useKnowledgeBase() {
     // 词库
     loadVocab, addVocab, removeVocab,
 
-    // 旧接口兼容
+    // 配置
+    loadChunkSize,
+
     loadStats, openKB,
-    folderPath, scannedFiles, selectedFiles, isScanning, importProgress,
-    isImporting, isPaused,
-    scanFolder, importFolder, toggleFile, selectAllFiles, deselectAllFiles,
-    selectFilesByType, deselectFilesByType, toggleFilesByType,
-    pauseImport, resumeImport, stopImport, resetFolderImport, stopPolling,
     saveChunkSize, rechunk,
   }
 }

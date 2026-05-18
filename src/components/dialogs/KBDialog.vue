@@ -17,6 +17,10 @@ const props = defineProps<{
   vocabList: string[]
 
   isUploadingKB: boolean
+  uploadProgress: number
+  uploadFileName: string
+  uploadTotalFiles: number
+  uploadCurrentFile: number
   searchLoading: boolean
   loading: boolean
 }>()
@@ -37,7 +41,8 @@ const emit = defineEmits<{
 
   // 文档
   loadDocuments: [folderId?: string]
-  uploadFile: [file: File, folderId?: string]
+  uploadFile: [file: File, folderId?: string, fileIndex?: number, totalFiles?: number]
+  uploadFiles: [files: File[]]
   updateDocument: [docId: string, updates: Record<string, any>]
   deleteDocument: [docId: string]
 
@@ -62,6 +67,7 @@ const emit = defineEmits<{
   openVocabDialog: []
   openChunkSizeDialog: []
   openBatchImportDialog: []
+  clearAll: [folderId?: string]
 }>()
 
 const activeFolder = ref('')
@@ -102,11 +108,11 @@ const onNewFolder = async () => {
 const onDrop = (e: DragEvent) => {
   const files = e.dataTransfer?.files
   if (!files) return
-  for (let i = 0; i < files.length; i++) {
-    const ext = files[i].name.split('.').pop()?.toLowerCase()
-    if (!['docx', 'md', 'txt'].includes(ext || '')) continue
-    emit('uploadFile', files[i], activeFolder.value || undefined)
-  }
+  const valid = Array.from(files).filter(f => {
+    const ext = f.name.split('.').pop()?.toLowerCase()
+    return ['docx', 'md', 'txt'].includes(ext || '')
+  })
+  if (valid.length > 0) emit('uploadFiles', valid)
 }
 
 const onUpload = () => {
@@ -115,9 +121,7 @@ const onUpload = () => {
   input.accept = '.docx,.md,.txt'
   input.multiple = true
   input.onchange = (e: any) => {
-    for (let i = 0; i < e.target.files.length; i++) {
-      emit('uploadFile', e.target.files[i], activeFolder.value || undefined)
-    }
+    emit('uploadFiles', Array.from(e.target.files))
   }
   input.click()
 }
@@ -232,7 +236,10 @@ const onOpen = () => {
             <span class="text-xs text-app-muted">{{ p.doc_count || 0 }}</span>
           </div>
         </div>
-        <el-button size="small" class="mt-2 w-full" @click="emit('openProjectDialog')">
+        <el-tooltip v-if="isUploadingKB" content="当前文件上传中，暂无法使用" placement="top">
+          <el-button size="small" class="mt-2 w-full" disabled>+ 新建</el-button>
+        </el-tooltip>
+        <el-button v-else size="small" class="mt-2 w-full" @click="emit('openProjectDialog')">
           + 新建
         </el-button>
       </div>
@@ -251,7 +258,10 @@ const onOpen = () => {
             <span class="text-sm font-medium text-primary">{{ activeFolderName }}</span>
           </template>
           <div class="flex-1" />
-          <el-button size="small" @click="onNewFolder">+ 文件夹</el-button>
+          <el-tooltip v-if="isUploadingKB" content="当前文件上传中，暂无法使用" placement="top">
+            <el-button size="small" disabled>+ 文件夹</el-button>
+          </el-tooltip>
+          <el-button v-else size="small" @click="onNewFolder">+ 文件夹</el-button>
         </div>
 
         <!-- Search bar -->
@@ -274,17 +284,32 @@ const onOpen = () => {
           拖拽 .docx / .md / .txt 文件到此处
         </div>
 
+        <!-- Upload progress -->
+        <div v-if="isUploadingKB && uploadTotalFiles > 0" class="mb-3">
+          <div class="flex items-center justify-between text-xs text-app-muted mb-1">
+            <span>正在上传: {{ uploadFileName }}</span>
+            <span>{{ uploadCurrentFile + 1 }}/{{ uploadTotalFiles }} | {{ uploadProgress }}%</span>
+          </div>
+          <el-progress :percentage="uploadProgress" :stroke-width="6" />
+        </div>
+
         <!-- Action buttons -->
         <div class="flex gap-2 mb-3">
           <el-button size="small" type="primary" :loading="isUploadingKB" @click="onUpload">
             上传文档
           </el-button>
-          <el-button size="small" @click="emit('openBatchImportDialog')">
-            批量导入
-          </el-button>
-          <el-button size="small" @click="emit('openChunkSizeDialog')">
-            切片设置
-          </el-button>
+          <el-tooltip v-if="isUploadingKB" content="当前文件上传中，暂无法使用" placement="top">
+            <el-button size="small" disabled>批量导入</el-button>
+          </el-tooltip>
+          <el-button v-else size="small" @click="emit('openBatchImportDialog')">批量导入</el-button>
+          <el-tooltip v-if="isUploadingKB" content="当前文件上传中，暂无法使用" placement="top">
+            <el-button size="small" disabled>切片设置</el-button>
+          </el-tooltip>
+          <el-button v-else size="small" @click="emit('openChunkSizeDialog')">切片设置</el-button>
+          <el-tooltip v-if="isUploadingKB" content="当前文件上传中，暂无法使用" placement="top">
+            <el-button size="small" disabled>清除</el-button>
+          </el-tooltip>
+          <el-button v-else size="small" type="danger" @click="emit('clearAll', activeFolder || undefined)">清除</el-button>
         </div>
 
         <!-- Folder + Document list -->
@@ -375,8 +400,14 @@ const onOpen = () => {
         项目: {{ currentProjectName }} | {{ kbStats.total_documents }} 文档 | {{ kbStats.total_chunks }} 块 | 已用 {{ formatSize(kbStats.total_size_bytes) }}
       </div>
       <div class="flex gap-2">
-        <el-button link size="small" @click="emit('openVocabDialog')">自定义词库</el-button>
-        <el-button link size="small" @click="emit('openBackupDialog')">备份管理</el-button>
+        <el-tooltip v-if="isUploadingKB" content="当前文件上传中，暂无法使用" placement="top">
+          <el-button link size="small" disabled>自定义词库</el-button>
+        </el-tooltip>
+        <el-button v-else link size="small" @click="emit('openVocabDialog')">自定义词库</el-button>
+        <el-tooltip v-if="isUploadingKB" content="当前文件上传中，暂无法使用" placement="top">
+          <el-button link size="small" disabled>备份管理</el-button>
+        </el-tooltip>
+        <el-button v-else link size="small" @click="emit('openBackupDialog')">备份管理</el-button>
       </div>
     </div>
   </el-dialog>

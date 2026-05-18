@@ -35,5 +35,27 @@ __pycache__/
 dist-electron
 
 # Release
-release
-release12
+release*/
+
+# Runtime data
+data/
+config.json
+image_library.json
+images/
+kb/
+documents.json
+documents/
+prd_check_log.json
+prompts.json
+uploads/
+reminders.json
+template.json
+template/
+
+# IDE / tools
+.agents/
+.trae/
+.superpowers/brainstorm/
+.claude/skills/find-skills/
+.claude/settings.local.json
+skills-lock.json

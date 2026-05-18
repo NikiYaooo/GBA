@@ -3,13 +3,21 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { apiUrl, getErrMsg } from '@/utils/api'
-import { Save, ChevronLeft, ChevronRight, Plus, X } from 'lucide-vue-next'
+import { Save, Plus, X, Image as ImageIcon } from 'lucide-vue-next'
 
 const visible = defineModel<boolean>('visible', { default: false })
+
+interface ImageLibRecord {
+  id: string
+  name: string
+  filename: string
+  created_at: string
+}
 
 const props2 = defineProps<{
   libraryImageDataUri?: string
   designPromptTemplate?: string
+  libraryImages?: ImageLibRecord[]
 }>()
 
 const emit2 = defineEmits<{
@@ -39,9 +47,14 @@ interface ImageItem {
 }
 const images = ref<ImageItem[]>([])
 const currentIndex = ref(0)
-const currentImage = computed(() => images.value[currentIndex.value] || null)
-const hasPrev = computed(() => currentIndex.value > 0)
-const hasNext = computed(() => currentIndex.value < images.value.length - 1)
+// 库图预览（不加入 images 数组，避免产生生成记录）
+const libraryPreviewData = ref<string | null>(null)
+const currentImage = computed(() => {
+  // 库图预览优先
+  if (libraryPreviewData.value) return { data_uri: libraryPreviewData.value, revised_prompt: '' }
+  if (images.value.length > 0) return images.value[currentIndex.value] || null
+  return null
+})
 
 
 // === 修改模式 ===
@@ -69,12 +82,30 @@ const onReferenceUpload = (e: Event) => {
 }
 const removeReferenceImage = (index: number) => { referenceImages.value.splice(index, 1) }
 
-// === 图片标签 ===
-const imageLabel = (index: number) => {
-  const img = images.value[index]
-  if (!img) return ''
-  if (img.revised_prompt && img.revised_prompt.length < 20) return img.revised_prompt
-  return '图片 ' + (index + 1)
+// === 图片库 ===
+const libraryDataCache = ref<Record<string, string>>({})
+const loadingLibraryId = ref('')
+const loadLibraryImage = async (id: string) => {
+  if (libraryDataCache.value[id]) {
+    images.value = []
+    libraryPreviewData.value = libraryDataCache.value[id]
+    return
+  }
+  loadingLibraryId.value = id
+  try {
+    const r = await axios.get(apiUrl(`/api/images/library/${id}/data`))
+    if (r.data.success && r.data.data?.data_uri) {
+      libraryDataCache.value[id] = r.data.data.data_uri
+      images.value = []
+      libraryPreviewData.value = r.data.data.data_uri
+    } else {
+      ElMessage.warning('加载图片失败')
+    }
+  } catch {
+    ElMessage.error('加载图片失败')
+  } finally {
+    loadingLibraryId.value = ''
+  }
 }
 
 // Canvas refs
@@ -131,11 +162,13 @@ const generate = async () => {
     const r = await axios.post(apiUrl('/api/image/generate'), {
       prompt: finalPrompt,
       model: selectedModel.value,
+      reference_images: referenceImages.value.length > 0 ? referenceImages.value : undefined,
     })
     if (r.data.success && r.data.data?.data_uri) {
       const newImg = { data_uri: r.data.data.data_uri, revised_prompt: r.data.data.revised_prompt }
-      images.value.push(newImg)
-      currentIndex.value = images.value.length - 1
+      images.value = [newImg]
+      currentIndex.value = 0
+      libraryPreviewData.value = null
       // 自动保存到图片库
       emit2('saveToLibrary', newImg.data_uri)
       ElMessage.success('生图完成')
@@ -170,6 +203,11 @@ const saveImage = async () => {
 // === 修改模式 ===
 const enterModifyMode = async () => {
   if (!currentImage.value) return
+  // 如果当前显示的是库图预览，先加入 images 以便编辑
+  if (images.value.length === 0 && libraryPreviewData.value) {
+    images.value.push({ data_uri: libraryPreviewData.value, revised_prompt: '' })
+    currentIndex.value = 0
+  }
   isModifyMode.value = true
   modifyPrompt.value = ''
   await nextTick()
@@ -281,6 +319,9 @@ watch(visible, (v) => {
   if (!v) {
     isModifyMode.value = false
     enhancedPrompt.value = ''
+    images.value = []
+    libraryPreviewData.value = null
+    currentIndex.value = 0
   }
 })
 
@@ -353,8 +394,9 @@ const submitEdit = async () => {
     })
     if (r.data.success && r.data.data?.data_uri) {
       const editImg = { data_uri: r.data.data.data_uri, revised_prompt: modifyPrompt.value }
-      images.value.push(editImg)
-      currentIndex.value = images.value.length - 1
+      images.value = [editImg]
+      currentIndex.value = 0
+      libraryPreviewData.value = null
       // 自动保存到图片库
       emit2('saveToLibrary', editImg.data_uri)
       exitModifyMode()
@@ -373,13 +415,13 @@ const submitEdit = async () => {
 <template>
   <el-dialog
     v-model="visible"
-    title="图片工具"
+    :title="isModifyMode ? '图片修改' : '图片工具'"
     width="920px"
     top="3vh"
     class="image-tool-dialog"
   >
     <div class="space-y-3">
-      <!-- Model selector + prompt + ref + generate -->
+      <!-- Top bar: model selector always visible, prompt/ref/gen hidden in modify mode -->
       <div class="flex gap-2 items-center">
         <el-select v-model="selectedModel" size="small" class="!w-32" placeholder="选择生图模型">
           <el-option
@@ -393,7 +435,8 @@ const submitEdit = async () => {
             <el-tag v-else size="small" type="primary" class="ml-2">云端</el-tag>
           </el-option>
         </el-select>
-        <el-input
+        <template v-if="!isModifyMode">
+          <el-input
           v-model="rawPrompt"
           size="small"
           placeholder="输入自然语言描述，AI将自动优化..."
@@ -404,10 +447,11 @@ const submitEdit = async () => {
           参考图片
         </el-button>
         <el-button size="small" type="primary" :loading="isGenerating" @click="generate">生图</el-button>
+        </template>
       </div>
 
       <!-- Reference image strip (toggle) -->
-      <div v-if="showReferenceStrip" class="flex gap-2 items-center overflow-x-auto py-2 px-1 bg-gray-50 rounded-lg min-h-[72px]">
+      <div v-if="showReferenceStrip && !isModifyMode" class="flex gap-2 items-center overflow-x-auto py-2 px-1 bg-app-light rounded-lg min-h-[72px]">
         <div
           v-for="(ref, i) in referenceImages" :key="i"
           class="relative shrink-0 w-14 h-14 rounded-lg overflow-hidden border border-app group"
@@ -423,7 +467,7 @@ const submitEdit = async () => {
         <div
           v-if="referenceImages.length < 5"
           @click="addReferenceImage"
-          class="shrink-0 w-14 h-14 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-primary hover:text-primary transition-colors"
+          class="shrink-0 w-14 h-14 rounded-lg border-2 border-dashed border-app flex items-center justify-center cursor-pointer hover:border-primary hover:text-primary transition-colors"
         >
           <Plus class="w-5 h-5" />
         </div>
@@ -433,14 +477,19 @@ const submitEdit = async () => {
 
       <!-- Main content: split layout -->
       <div class="flex gap-3 min-h-[350px]">
-        <!-- Left: image name list -->
-        <div v-if="images.length > 0" class="w-32 shrink-0 border-r border-app-light pr-2 overflow-y-auto max-h-[420px] space-y-0.5">
-          <div
-            v-for="(img, i) in images" :key="i"
-            @click="currentIndex = i"
-            :class="['p-2 text-xs rounded cursor-pointer transition-colors truncate', i === currentIndex ? 'bg-primary-light text-app-primary font-medium' : 'text-app-secondary hover:bg-app-hover']"
-          >
-            {{ imageLabel(i) }}
+        <!-- Left: image name list (hidden in modify mode) -->
+        <div v-if="!isModifyMode" class="w-32 shrink-0 border-r border-app-light pr-2 overflow-y-auto max-h-[420px] space-y-0.5">
+          <!-- Library images section -->
+          <div v-if="props2.libraryImages && props2.libraryImages.length > 0">
+            <div class="text-xs font-medium text-app-muted mb-1 px-1">图片库</div>
+            <div
+              v-for="libImg in props2.libraryImages" :key="libImg.id"
+              @click="loadLibraryImage(libImg.id)"
+              :class="['p-2 text-xs rounded cursor-pointer transition-colors truncate flex items-center gap-1', loadingLibraryId === libImg.id ? 'opacity-50' : 'text-app-secondary hover:bg-app-hover']"
+            >
+              <ImageIcon class="w-3 h-3 shrink-0" />
+              <span class="truncate">{{ libImg.name }}</span>
+            </div>
           </div>
         </div>
 
@@ -448,21 +497,15 @@ const submitEdit = async () => {
         <div class="flex-1 min-w-0">
           <!-- ====== Non-modify mode ====== -->
           <div v-if="!isModifyMode" class="flex flex-col items-center gap-3">
-            <!-- Generated images area -->
-            <div v-if="images.length > 0" class="relative w-full flex items-center justify-center gap-2">
-              <el-button :disabled="!hasPrev" circle size="small" @click="currentIndex--">
-                <ChevronLeft class="w-4 h-4" />
-              </el-button>
-              <div class="flex-1 flex justify-center">
+            <!-- Preview area -->
+            <div v-if="currentImage" class="relative w-full flex justify-center">
+              <div class="flex-1 flex justify-center max-w-full">
                 <img
                   :src="currentImage?.data_uri"
                   class="max-w-full max-h-[400px] rounded-lg shadow-md object-contain"
-                  alt="生成的图片"
+                  alt="图片预览"
                 />
               </div>
-              <el-button :disabled="!hasNext" circle size="small" @click="currentIndex++">
-                <ChevronRight class="w-4 h-4" />
-              </el-button>
             </div>
 
             <!-- Empty state -->
@@ -471,18 +514,13 @@ const submitEdit = async () => {
             </div>
 
             <!-- Action buttons -->
-            <div v-if="images.length > 0" class="flex gap-2">
+            <div v-if="currentImage" class="flex gap-2">
               <el-button size="small" @click="saveImage">
                 <Save class="w-3.5 h-3.5 mr-1" />导出
               </el-button>
               <el-button size="small" type="primary" @click="enterModifyMode">
                 修改
               </el-button>
-            </div>
-
-            <!-- Page indicator -->
-            <div v-if="images.length > 1" class="text-xs text-app-muted">
-              {{ currentIndex + 1 }} / {{ images.length }}
             </div>
           </div>
 

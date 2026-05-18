@@ -8,7 +8,7 @@ import {
   Underline, AlignLeft, AlignCenter, AlignRight,
   Image, Table as TableIcon, List, ListOrdered, Zap,
   Strikethrough, Code, Minus, Undo, Redo,
-  Highlighter, LetterText, Brain, Save, Plus
+  Highlighter, LetterText, Save, Plus
 } from 'lucide-vue-next'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -663,10 +663,30 @@ const clearResult = async () => {
 }
 
 // --- KB handlers ---
-const handleKBUpload = async (file: File, folderId?: string) => {
-  const ok = await kb.uploadFile(file, folderId)
+const handleKBUpload = async (file: File, folderId?: string, fileIndex?: number, totalFiles?: number) => {
+  const ok = await kb.uploadFile(file, folderId, fileIndex, totalFiles)
   if (ok) ElMessage.success('入库成功')
   else ElMessage.warning('入库失败')
+}
+
+const handleKBUploadFiles = async (files: File[]) => {
+  const total = files.length
+  for (let i = 0; i < total; i++) {
+    const ok = await kb.uploadFile(files[i], kb.activeFolderFilter.value || undefined, i, total)
+    if (ok && i === total - 1) ElMessage.success(`全部入库完成（${total} 个）`)
+  }
+}
+
+const handleKBClear = async (folderId?: string) => {
+  try {
+    await ElMessageBox.confirm('是否清除该目录下文档？', '确认清除', {
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    await kb.clearAll(folderId || undefined)
+    ElMessage.success('已清除')
+  } catch { /* cancelled */ }
 }
 
 const handleKBDelete = async (docId: string) => {
@@ -1111,6 +1131,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       v-model:visible="showImageToolDialog"
       :library-image-data-uri="libraryEditImageUri"
       :design-prompt-template="designPromptTemplate"
+      :library-images="imageLib.images.value"
       @save-to-library="(uri: string) => { imageLib.saveImage(uri, '未命名图片') }"
     />
 
@@ -1181,6 +1202,10 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       :backups="kb.backups.value"
       :vocab-list="kb.vocabList.value"
       :is-uploading-k-b="kb.isUploadingKB.value"
+      :upload-progress="kb.uploadProgress.value"
+      :upload-file-name="kb.uploadFileName.value"
+      :upload-total-files="kb.uploadTotalFiles.value"
+      :upload-current-file="kb.uploadCurrentFile.value"
       :search-loading="kb.searchLoading.value"
       :loading="kb.loading.value"
       @load-projects="kb.loadProjects"
@@ -1193,6 +1218,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @delete-folder="kb.deleteFolder"
       @load-documents="kb.loadDocuments"
       @upload-file="handleKBUpload"
+      @upload-files="handleKBUploadFiles"
       @update-document="kb.updateDocument"
       @delete-document="handleKBDelete"
       @search="kb.search"
@@ -1210,6 +1236,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @open-chunk-size-dialog="showChunkSizeDialog = true"
       @open-batch-import-dialog="showBatchImportDialog = true"
       @rename-project="kb.renameProject"
+      @clear-all="handleKBClear"
     />
 
     <KBSearchPanel
@@ -1267,7 +1294,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
     <KBBatchImportDialog
       v-model:visible="showBatchImportDialog"
       :active-project-id="kb.activeProjectId.value"
-      :folders="kb.folders.value"
+      :active-folder-id="kb.activeFolderFilter.value || undefined"
       @import-files="handleBatchImport"
     />
 
