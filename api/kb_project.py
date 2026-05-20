@@ -632,14 +632,32 @@ class KBProject:
         }
 
     def get_documents(self, folder_id: Optional[str] = None) -> List[Dict]:
-        """获取文档列表，可按文件夹筛选。"""
+        """获取文档列表，可按文件夹筛选。
+        folder_id=None 时只返回未归类文档（不在任何文件夹下的）；
+        folder_id=具体UUID 时返回该文件夹下的文档。"""
         if folder_id is None:
-            return list(self.documents)
+            return [d for d in self.documents if not d.get("folder_id")]
         return [d for d in self.documents if d.get("folder_id") == folder_id]
 
     # ------------------------------------------------------------------
     # 检索
     # ------------------------------------------------------------------
+
+    def _rewrite_query(self, query: str) -> str:
+        """将用户需求改写为更好的搜索查询。
+        规则改写：去语气词 + 提取核心名词短语。
+        """
+        import re
+        cleaned = re.sub(
+            r'^(请|帮我|做一个|设计一个|写一个|生成一个|需要|我要|我想)',
+            '', query.strip()
+        )
+        cleaned = re.sub(r'[。！？，、；：]', ' ', cleaned)
+        cleaned = re.sub(r'[^\w一-鿿\s]', ' ', cleaned)
+        tokens = [w for w in cleaned.split() if len(w) >= 2]
+        if len(' '.join(tokens)) < 4:
+            return query
+        return ' '.join(tokens)
 
     def search(self, query: str, top_k: int = 5, folder_id: str = None) -> List[Dict]:
         """混合检索：向量语义 + BM25 关键词 + RRF 融合排序。"""
@@ -647,6 +665,8 @@ class KBProject:
         import jieba
         if not self._chunks or not query:
             return []
+
+        query = self._rewrite_query(query)
 
         # 确定需要检索的 chunk 范围
         if folder_id:

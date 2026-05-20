@@ -1,7 +1,7 @@
 {
   "name": "game_builder",
   "private": true,
-  "version": "2.6.12",
+  "version": "2.6.13",
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -12,7 +12,9 @@
     "lint": "eslint . --ext .ts,.vue",
     "lint:fix": "eslint . --ext .ts,.vue --fix",
     "electron:dev": "vite",
-    "electron:build": "vue-tsc -b && vite build && electron-builder"
+    "electron:build": "vue-tsc -b && vite build && electron-builder",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@tiptap/extension-color": "^3.22.5",
@@ -46,12 +48,14 @@
     "@typescript-eslint/parser": "^7.0.1",
     "@vitejs/plugin-vue": "^5.0.3",
     "@vue/runtime-dom": "^3.4.15",
+    "@vue/test-utils": "^2.4.10",
     "@vue/tsconfig": "^0.7.0",
     "autoprefixer": "^10.4.17",
     "electron": "^27.0.0",
     "electron-builder": "^24.6.4",
     "eslint": "^8.56.0",
     "eslint-plugin-vue": "^9.20.1",
+    "happy-dom": "^20.9.0",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "typescript": "~5.3.3",
@@ -60,6 +64,7 @@
     "vite-plugin-electron": "^0.15.4",
     "vite-plugin-electron-renderer": "^0.14.5",
     "vite-plugin-trae-solo-badge": "^1.0.0",
+    "vitest": "^3.2.4",
     "vue-tsc": "^1.8.27"
   },
   "build": {

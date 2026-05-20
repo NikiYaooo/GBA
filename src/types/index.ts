@@ -36,6 +36,14 @@ export interface CellData {
   v: string
   f: string
   color?: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
+  fontSize?: number
+  fontFamily?: string
+  textColor?: string
+  textAlign?: 'left' | 'center' | 'right'
 }
 
 export interface ExcelState {
@@ -163,4 +171,14 @@ export interface KBBackup {
   filename: string
   size: number
   created_at: number
+}
+
+export interface ProjectProfile {
+  game_name: string
+  genre: string
+  world_setting: string
+  target_audience: string
+  terminology: Record<string, string>
+  template_sections: string[]
+  design_principles: string[]
 }

@@ -37,6 +37,36 @@ async def parse_excel(request: Request):
                         "v": str(computed_val) if computed_val is not None else "",
                         "f": formula
                     })
+                    # 读取单元格格式
+                    try:
+                        if cell.font:
+                            cell_style = {}
+                            if cell.font.bold: cell_style["bold"] = True
+                            if cell.font.italic: cell_style["italic"] = True
+                            if cell.font.underline and cell.font.underline != 'none': cell_style["underline"] = True
+                            if cell.font.strike: cell_style["strikethrough"] = True
+                            if cell.font.size: cell_style["fontSize"] = cell.font.size
+                            if cell.font.name: cell_style["fontFamily"] = cell.font.name
+                            try:
+                                if cell.font.color and cell.font.color.rgb:
+                                    rgb = str(cell.font.color.rgb)
+                                    if rgb and rgb != '00000000':
+                                        cell_style["textColor"] = "#" + (rgb[-6:] if len(rgb) >= 6 else rgb)
+                            except Exception:
+                                pass
+                            if cell_style:
+                                row_data[-1].update(cell_style)
+                        if cell.alignment and cell.alignment.horizontal:
+                            row_data[-1]["textAlign"] = cell.alignment.horizontal
+                        if cell.fill and cell.fill.start_color:
+                            try:
+                                rgb = str(cell.fill.start_color.rgb)
+                                if rgb and rgb != '00000000':
+                                    row_data[-1]["color"] = "#" + (rgb[-6:] if len(rgb) >= 6 else rgb)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                 rows.append(row_data)
             sheets.append({
                 "name": sheet_name,
@@ -86,6 +116,28 @@ async def save_excel(payload: dict = Body(...)):
                         )
                     cell.border = thin_border
                     cell.alignment = Alignment(horizontal='center', vertical='center')
+                    # 写入单元格格式
+                    bold = cell_data.get("bold", False)
+                    italic = cell_data.get("italic", False)
+                    underline = cell_data.get("underline", False)
+                    strikethrough = cell_data.get("strikethrough", False)
+                    font_size = cell_data.get("fontSize")
+                    font_family = cell_data.get("fontFamily")
+                    text_color = cell_data.get("textColor", "")
+                    if any([bold, italic, underline, strikethrough, font_size, font_family, text_color]):
+                        font_kwargs = {}
+                        if bold: font_kwargs["bold"] = True
+                        if italic: font_kwargs["italic"] = True
+                        if underline: font_kwargs["underline"] = "single"
+                        if strikethrough: font_kwargs["strike"] = True
+                        if font_size: font_kwargs["size"] = font_size
+                        if font_family: font_kwargs["name"] = font_family
+                        if text_color: font_kwargs["color"] = text_color.lstrip('#')
+                        if font_kwargs:
+                            cell.font = Font(**font_kwargs)
+                    text_align = cell_data.get("textAlign")
+                    if text_align:
+                        cell.alignment = Alignment(horizontal=text_align, vertical='center')
 
         tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
         wb.save(tmp.name)

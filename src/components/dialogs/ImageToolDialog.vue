@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { apiUrl, getErrMsg } from '@/utils/api'
 import { Save, Plus, X, Image as ImageIcon } from 'lucide-vue-next'
+import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL } from '@/model-defs'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -18,23 +19,17 @@ const props2 = defineProps<{
   libraryImageDataUri?: string
   designPromptTemplate?: string
   libraryImages?: ImageLibRecord[]
+  libraryLoading?: boolean
 }>()
 
 const emit2 = defineEmits<{
   saveToLibrary: [dataUri: string]
 }>()
 
-// === 生图模型列表 ===
-const imageModels = [
-  { name: 'GPT-Image 2', type: 'cloud' },
-  { name: 'Qwen-Image 2', type: 'cloud' },
-  { name: 'Midjourney', type: 'cloud' },
-  { name: 'Google Banana', type: 'cloud' },
-  { name: '豆包Seedream', type: 'cloud' },
-  { name: 'Stable Diffusion（本地）', type: 'local' },
-]
+// === 生图模型列表（从共享定义导入）===
+const imageModels = IMAGE_MODELS
 
-const selectedModel = ref('GPT-Image 2')
+const selectedModel = ref(DEFAULT_IMAGE_MODEL)
 const rawPrompt = ref('')
 const enhancedPrompt = ref('')
 const isEnhancing = ref(false)
@@ -116,6 +111,35 @@ let editCtx: CanvasRenderingContext2D | null = null
 let isDrawing = false
 const mousePos = ref({ x: -1, y: -1 })
 const canvasContainerStyle = ref({ height: '400px' })
+
+// === 画板撤销历史 ===
+const maskHistory: ImageData[] = []
+const MAX_HISTORY = 20
+let historyIndex = -1
+
+const saveMaskSnapshot = () => {
+  if (!editCanvasRef.value || !editCtx) return
+  const data = editCtx.getImageData(0, 0, editCanvasRef.value.width, editCanvasRef.value.height)
+  // 清除当前索引之后的历史（如果在撤销后又画了）
+  maskHistory.splice(historyIndex + 1)
+  maskHistory.push(data)
+  if (maskHistory.length > MAX_HISTORY) maskHistory.shift()
+  historyIndex = maskHistory.length - 1
+}
+
+const undoMask = () => {
+  if (historyIndex <= 0 || !editCanvasRef.value || !editCtx) return
+  historyIndex--
+  editCtx.putImageData(maskHistory[historyIndex], 0, 0)
+  paintedVersion.value++
+}
+
+const onKeyDown = (e: KeyboardEvent) => {
+  if (e.ctrlKey && e.key === 'z') {
+    e.preventDefault()
+    undoMask()
+  }
+}
 
 // === 提示词增强 ===
 const enhancePrompt = async () => {
@@ -246,6 +270,13 @@ const initCanvas = () => {
       overlay.style.width = w + 'px'
       overlay.style.height = h + 'px'
       editCtx = overlay.getContext('2d')
+      // 清空遮罩并记录初始快照
+      if (editCtx) {
+        editCtx.clearRect(0, 0, w, h)
+        maskHistory.length = 0
+        historyIndex = -1
+        saveMaskSnapshot()
+      }
     }
 
     canvasContainerStyle.value = { height: h + 'px' }
@@ -280,8 +311,15 @@ const onMouseMove = (e: MouseEvent) => {
   if (isDrawing && editCtx) drawBrush(e)
 }
 
-const onMouseUp = () => { isDrawing = false }
-const onMouseLeave = () => { isDrawing = false; mousePos.value = { x: -1, y: -1 } }
+const onMouseUp = () => {
+  isDrawing = false
+  saveMaskSnapshot()
+}
+const onMouseLeave = () => {
+  if (isDrawing) saveMaskSnapshot()
+  isDrawing = false
+  mousePos.value = { x: -1, y: -1 }
+}
 
 const drawBrush = (e: MouseEvent) => {
   if (!editCtx || !editCanvasRef.value) return
@@ -480,7 +518,10 @@ const submitEdit = async () => {
         <!-- Left: image name list (hidden in modify mode) -->
         <div v-if="!isModifyMode" class="w-32 shrink-0 border-r border-app-light pr-2 overflow-y-auto max-h-[420px] space-y-0.5">
           <!-- Library images section -->
-          <div v-if="props2.libraryImages && props2.libraryImages.length > 0">
+          <div v-if="props2.libraryLoading" class="px-1 py-2 text-xs text-app-muted text-center">
+            加载中...
+          </div>
+          <div v-else-if="props2.libraryImages && props2.libraryImages.length > 0">
             <div class="text-xs font-medium text-app-muted mb-1 px-1">图片库</div>
             <div
               v-for="libImg in props2.libraryImages" :key="libImg.id"
@@ -491,6 +532,7 @@ const submitEdit = async () => {
               <span class="truncate">{{ libImg.name }}</span>
             </div>
           </div>
+          <div v-else class="px-1 py-2 text-xs text-app-muted text-center">暂无图片</div>
         </div>
 
         <!-- Right: image preview or modify mode -->
@@ -545,7 +587,12 @@ const submitEdit = async () => {
             </div>
 
             <!-- Canvas stack -->
-            <div class="relative border rounded-lg overflow-hidden" :style="canvasContainerStyle">
+            <div
+              class="relative border rounded-lg overflow-hidden"
+              :style="canvasContainerStyle"
+              tabindex="0"
+              @keydown="onKeyDown"
+            >
               <canvas ref="canvasRef" class="absolute inset-0" />
               <canvas
                 ref="editCanvasRef"
@@ -577,6 +624,7 @@ const submitEdit = async () => {
                   已涂抹 {{ paintedPercent }}% 区域
                 </span>
                 <el-button v-if="hasMask" size="small" text @click="clearMask">清除涂抹</el-button>
+                <el-button v-if="historyIndex > 0" size="small" text @click="undoMask">撤销</el-button>
               </div>
               <div class="flex gap-2 flex-1 ml-4">
                 <el-input

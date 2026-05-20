@@ -52,6 +52,45 @@ async def imitate(payload: dict = Body(...)):
         return {"success": False, "message": f"AI 服务调用失败: {str(e)}"}
 
 
+@router.post("/imitate-iterate")
+async def imitate_iterate(payload: dict = Body(...)):
+    model = payload.get("model", "DeepSeek")
+    full_doc = payload.get("full_doc", "")
+    instruction = payload.get("instruction", "")
+    mode = payload.get("mode", "section")
+    target_section = payload.get("target_section", "")
+    selection_context = payload.get("selection_context", None)
+    project_id = payload.get("project_id", "")
+    template_content = payload.get("template_content", "")
+
+    if not full_doc:
+        raise HTTPException(status_code=400, detail="文档内容不能为空")
+    if not instruction:
+        raise HTTPException(status_code=400, detail="修改指令不能为空")
+    if mode == "section" and not target_section:
+        raise HTTPException(status_code=400, detail="章节模式下必须指定目标章节")
+    if mode == "selection" and not selection_context:
+        raise HTTPException(status_code=400, detail="选区模式下必须提供选中上下文")
+
+    try:
+        result = await get_ai_service().imitate_iterate(
+            model, full_doc, instruction, mode=mode,
+            target_section=target_section,
+            selection_context=selection_context,
+            project_id=project_id,
+            template_content=template_content,
+        )
+        return {"success": True, "data": {
+            "replacement": result,
+            "section_title": target_section,
+            "mode": mode,
+        }}
+    except ValueError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        return {"success": False, "message": f"AI 服务调用失败: {str(e)}"}
+
+
 @router.post("/complete-logic")
 async def complete_logic(payload: dict = Body(...)):
     model = payload.get("model", "DeepSeek")

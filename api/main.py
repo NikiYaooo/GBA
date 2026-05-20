@@ -3,6 +3,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from utils import get_app_data_dir, ensure_dir, load_json, save_json
+from switch_checker import SwitchMiddleware
 from default_prompts import DEFAULT_PROMPTS
 from knowledge_base import KnowledgeBase
 from ai_service import AIService
@@ -18,6 +19,7 @@ import routers.template as template_router
 import routers.reminders as reminders_router
 import routers.image_gen as image_gen_router
 import routers.image_library as image_library_router
+import routers.project_profile as project_profile_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = get_app_data_dir()
@@ -61,6 +63,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 远程开关中间件（所有 API 请求前/后检测）
+app.add_middleware(SwitchMiddleware)
+
 # 将共享服务挂载到路由器
 kb_router.router.kb = kb
 ai_router.router.ai_service = ai_service
@@ -78,6 +83,7 @@ app.include_router(template_router.router)
 app.include_router(reminders_router.router)
 app.include_router(image_gen_router.router)
 app.include_router(image_library_router.router)
+app.include_router(project_profile_router.router)
 
 
 @app.get("/")

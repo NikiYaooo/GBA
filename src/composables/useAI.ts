@@ -2,22 +2,26 @@ import { ref } from 'vue'
 import axios from 'axios'
 import { apiUrl, getErrMsg } from '@/utils/api'
 import type { ApiResponse } from '@/types'
+import { TEXT_MODELS, DEFAULT_TEXT_MODEL } from '@/model-defs'
 
 export function useAI() {
-  const activeModel = ref('DeepSeek')
+  const activeModel = ref(DEFAULT_TEXT_MODEL)
   const aiResult = ref('')
   const isProcessing = ref(false)
   const iterativePrompt = ref('')
 
-  const models = ref([
-    { name: '豆包', type: 'cloud' as const },
-    { name: 'DeepSeek', type: 'cloud' as const },
-    { name: 'GPT', type: 'cloud' as const },
-    { name: 'Gemini', type: 'cloud' as const },
-    { name: 'Kimi', type: 'cloud' as const },
-    { name: 'GLM', type: 'cloud' as const },
-    { name: 'Ollama (本地)', type: 'local' as const },
-  ])
+  const models = ref([...TEXT_MODELS])
+
+  // 迭代修改相关
+  const iterationHistory = ref<{
+    instruction: string
+    targetSection: string
+    replacement: string
+    timestamp: number
+  }[]>([])
+  const showIterationPanel = ref(false)
+  const iterationInput = ref('')
+  const isIterating = ref(false)
 
   const runQualityCheck = async (content: string, systemPrompt?: string): Promise<string | null> => {
     const r = await axios.post<ApiResponse<string>>(apiUrl('/api/ai/quality-check'), {
@@ -54,8 +58,47 @@ export function useAI() {
     return titleMatch ? `[${titleMatch[1]}${titleMatch[2]}]策划案` : '[策划案]'
   }
 
+  const runIteration = async (
+    fullDoc: string,
+    instruction: string,
+    mode: 'section' | 'selection' | 'full' = 'section',
+    targetSection?: string,
+    selectionContext?: { selected: string; before: string; after: string },
+    projectId?: string,
+  ): Promise<string | null> => {
+    isIterating.value = true
+    try {
+      const r = await axios.post(apiUrl('/api/ai/imitate-iterate'), {
+        model: activeModel.value,
+        full_doc: fullDoc,
+        instruction,
+        mode,
+        target_section: targetSection || '',
+        selection_context: selectionContext || null,
+        project_id: projectId || undefined,
+      })
+      if (r.data.success && r.data.data?.replacement) {
+        iterationHistory.value.push({
+          instruction,
+          targetSection: targetSection || '',
+          replacement: r.data.data.replacement,
+          timestamp: Date.now(),
+        })
+        return r.data.data.replacement
+      }
+      return null
+    } catch (e: any) {
+      console.error('迭代修改失败:', e)
+      return null
+    } finally {
+      isIterating.value = false
+    }
+  }
+
   return {
     activeModel, models, aiResult, isProcessing, iterativePrompt,
-    runQualityCheck, runImitation, runLogicCompletion, iterate, generateDocTitle
+    runQualityCheck, runImitation, runLogicCompletion, iterate, generateDocTitle,
+    runIteration, iterationHistory,
+    showIterationPanel, iterationInput, isIterating,
   }
 }

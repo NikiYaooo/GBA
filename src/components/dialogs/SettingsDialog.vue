@@ -1,18 +1,15 @@
 <script setup lang="ts">
-import type { ModelConfig, Profession, PromptTemplate } from '@/types'
+import type { ModelConfig, Profession, PromptTemplate, ProjectProfile } from '@/types'
+import { ref, watch } from 'vue'
 import { Trash2, Plus, Image } from 'lucide-vue-next'
 import { ElMessage } from 'element-plus'
+import axios from 'axios'
+import { apiUrl } from '@/utils/api'
+import { IMAGE_MODELS } from '@/model-defs'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
-const imageModels = [
-  { name: 'GPT-Image 2', type: 'cloud' as const },
-  { name: 'Qwen-Image 2', type: 'cloud' as const },
-  { name: 'Midjourney', type: 'cloud' as const },
-  { name: 'Google Banana', type: 'cloud' as const },
-  { name: '豆包Seedream', type: 'cloud' as const },
-  { name: 'Stable Diffusion（本地）', type: 'local' as const },
-]
+const imageModels = IMAGE_MODELS
 
 const props = defineProps<{
   autoStart: boolean
@@ -63,6 +60,56 @@ const setImageModelConfig = (name: string, key: string, value: string) => {
   }
   ;(props.modelConfigs[name] as any)[key] = value
 }
+
+// 项目画像
+const profile = ref<ProjectProfile>({
+  game_name: '', genre: '', world_setting: '', target_audience: '',
+  terminology: {}, template_sections: ['背景', '目标', '规则', '奖励', '限制', 'UI'],
+  design_principles: [],
+})
+const profileLoading = ref(false)
+const profileSaving = ref(false)
+const newTermKey = ref('')
+const newTermVal = ref('')
+const newPrinciple = ref('')
+
+const loadProfile = async () => {
+  profileLoading.value = true
+  try {
+    const r = await axios.get(apiUrl('/api/project-profile'))
+    if (r.data.success && r.data.data) profile.value = r.data.data
+  } catch { /* ignore */ }
+  finally { profileLoading.value = false }
+}
+
+const saveProfileHandler = async () => {
+  profileSaving.value = true
+  try {
+    await axios.put(apiUrl('/api/project-profile'), profile.value)
+    ElMessage.success('项目画像已保存')
+  } catch { ElMessage.error('保存失败') }
+  finally { profileSaving.value = false }
+}
+
+const addTerm = () => {
+  if (!newTermKey.value.trim() || !newTermVal.value.trim()) return
+  profile.value.terminology[newTermKey.value.trim()] = newTermVal.value.trim()
+  newTermKey.value = ''
+  newTermVal.value = ''
+}
+
+const removeTerm = (key: string) => { delete profile.value.terminology[key] }
+
+const addPrinciple = () => {
+  if (!newPrinciple.value.trim()) return
+  profile.value.design_principles.push(newPrinciple.value.trim())
+  newPrinciple.value = ''
+}
+
+const removePrinciple = (idx: number) => { profile.value.design_principles.splice(idx, 1) }
+
+// 对话框打开时加载画像
+watch(visible, (v) => { if (v) loadProfile() })
 </script>
 
 <template>
@@ -203,6 +250,75 @@ const setImageModelConfig = (name: string, key: string, value: string) => {
         </div>
         <div class="mt-4 flex justify-end">
           <el-button type="primary" @click="emit('saveConfig')">保存生图配置</el-button>
+        </div>
+      </el-tab-pane>
+
+      <!-- 项目画像 -->
+      <el-tab-pane label="项目画像">
+        <div class="py-4 space-y-4 max-h-[400px] overflow-y-auto pr-2">
+          <p class="text-xs text-app-muted mb-2">填写项目基本信息，AI 仿写时将自动遵守项目设定和术语。</p>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-app-secondary block mb-1">游戏名称</label>
+              <el-input v-model="profile.game_name" size="small" placeholder="例如：梦幻西游" />
+            </div>
+            <div>
+              <label class="text-xs text-app-secondary block mb-1">游戏类型</label>
+              <el-select v-model="profile.genre" size="small" class="w-full">
+                <el-option label="MMORPG" value="MMORPG" />
+                <el-option label="卡牌" value="卡牌" />
+                <el-option label="SLG" value="SLG" />
+                <el-option label="ACT" value="ACT" />
+                <el-option label="休闲" value="休闲" />
+                <el-option label="其他" value="其他" />
+              </el-select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-app-secondary block mb-1">世界观设定</label>
+            <el-input v-model="profile.world_setting" size="small" placeholder="例如：东方玄幻，仙侠世界" />
+          </div>
+          <div>
+            <label class="text-xs text-app-secondary block mb-1">目标用户</label>
+            <el-input v-model="profile.target_audience" size="small" placeholder="例如：18-35岁男性玩家" />
+          </div>
+
+          <div>
+            <label class="text-xs text-app-secondary block mb-1">术语映射</label>
+            <div class="space-y-1">
+              <div v-for="(v, k) in profile.terminology" :key="k" class="flex items-center gap-2 text-xs">
+                <span class="font-mono bg-app-hover px-1 rounded">{{ k }}</span>
+                <span>→</span>
+                <span class="text-green-600">{{ v }}</span>
+                <el-button link size="small" type="danger" @click="removeTerm(k)">删除</el-button>
+              </div>
+            </div>
+            <div class="flex gap-1 mt-1">
+              <el-input v-model="newTermKey" size="small" placeholder="原文（如 HP）" class="!w-28" />
+              <el-input v-model="newTermVal" size="small" placeholder="映射（如 气血）" class="!w-28" />
+              <el-button size="small" @click="addTerm" :disabled="!newTermKey.trim() || !newTermVal.trim()">添加</el-button>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-xs text-app-secondary block mb-1">设计原则</label>
+            <div class="space-y-1">
+              <div v-for="(p, i) in profile.design_principles" :key="i" class="flex items-center gap-2 text-xs">
+                <span class="text-green-600">&#8226;</span>
+                <span>{{ p }}</span>
+                <el-button link size="small" type="danger" @click="removePrinciple(i)">删除</el-button>
+              </div>
+            </div>
+            <div class="flex gap-1 mt-1">
+              <el-input v-model="newPrinciple" size="small" placeholder="例如：所有数值必须可配置" @keyup.enter="addPrinciple" />
+              <el-button size="small" @click="addPrinciple" :disabled="!newPrinciple.trim()">添加</el-button>
+            </div>
+          </div>
+
+          <div class="flex justify-end">
+            <el-button type="primary" :loading="profileSaving" @click="saveProfileHandler">保存画像</el-button>
+          </div>
         </div>
       </el-tab-pane>
 

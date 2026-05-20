@@ -78,6 +78,8 @@ export function useDocuments(activeCategory: Ref<string>) {
       timeout: 120000
     })
     if (r.data.success && r.data.data) {
+      // 立即插入到列表头部，无需等待重新请求
+      docList.value.unshift(r.data.data)
       return r.data.data
     }
     return null

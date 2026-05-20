@@ -3,9 +3,7 @@ uvicorn
 python-multipart
 python-docx
 markdown
-langchain
-langchain-community
-chromadb
+python-docx
 openai
 pydantic
 python-dotenv

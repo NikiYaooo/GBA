@@ -211,6 +211,7 @@ async def upload_multiple(project_id: str, request: Request):
     if not proj:
         raise HTTPException(status_code=404, detail="项目不存在")
     form = await request.form()
+    folder_id = form.get("folder_id", "") or ""
     results = []
     for key in form.keys():
         field = form.get(key)
@@ -232,6 +233,7 @@ async def upload_multiple(project_id: str, request: Request):
                 file_path=file_path, filename=safe_name,
                 content=str(content) if content else "",
                 doc_type=doc_type, file_size=len(raw_bytes),
+                folder_id=folder_id,
             )
             results.append({"filename": safe_name, **result})
             if os.path.exists(file_path):
@@ -251,7 +253,7 @@ async def import_files(project_id: str, payload: dict = Body(...)):
     results = []
     for item in files:
         file_path = item.get("path", "")
-        folder_id = item.get("folder_id", "")
+        folder_id = item.get("folder_id", "") or item.get("folderId", "")
         if not file_path or not os.path.isfile(file_path):
             results.append({"filename": os.path.basename(file_path), "success": False, "message": "文件不存在"})
             continue

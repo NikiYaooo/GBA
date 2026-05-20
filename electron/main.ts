@@ -21,6 +21,47 @@ let win: BrowserWindow | null
 let pythonProcess: ChildProcess | null = null
 let backendBaseUrl = 'http://127.0.0.1:8000'
 
+// ========== 远程开关 ==========
+const SWITCH_URL = 'https://github.com/NikiYaooo/GBA-switch/blob/main/switch.txt'
+
+/**
+ * 检查远程开关（从 GitHub blob 页解析 rawLines JSON 字段）。
+ * 返回 true 表示允许使用。
+ * 网络异常时默认允许（fail open），避免因无法访问 GitHub 导致软件不可用。
+ */
+async function checkSwitch(): Promise<boolean> {
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+    const response = await fetch(SWITCH_URL, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    })
+    clearTimeout(timeout)
+    const html = await response.text()
+    // GitHub blob page 将文件内容嵌入 rawLines JSON 字段中
+    const match = html.match(/rawLines":\s*\[?\s*"([^"]+)"\s*\]?/)
+    if (match) {
+      return match[1].trim() === '1'
+    }
+    return false
+  } catch {
+    return true // fail open
+  }
+}
+
+/**
+ * 开关前置守卫：在 IPC handler 开头调用，返回 false 时 handler 应拒绝操作。
+ */
+async function guardSwitch(): Promise<boolean> {
+  const ok = await checkSwitch()
+  if (!ok) {
+    // 通知渲染进程显示权限不足
+    win?.webContents.send('switch-denied', '软件权限不足')
+  }
+  return ok
+}
+
 /**
  * 确保端口 8000 可用：杀掉占用进程后等待，然后绑定确认。
  */
@@ -362,6 +403,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('test-ai-model', async (_event, modelName: string, apiKey: string, modelId: string) => {
+    if (!await guardSwitch()) return { success: false, error: '软件权限不足' }
     const https = require('node:https')
     const http = require('node:http')
 
@@ -452,8 +494,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('get-backend-base-url', () => backendBaseUrl)
 
+  // 远程开关：退出应用
+  ipcMain.handle('quit-app', () => { app.quit() })
+
   // 快捷工具：运行 SVN 更新（支持 TortoiseSVN 和原生 svn）
   ipcMain.handle('run-svn-update', async (_event, folderPath: string, tortoisePath?: string) => {
+    if (!await guardSwitch()) return { success: false, message: '软件权限不足' }
     try {
       // 优先使用 TortoiseSVN
       if (tortoisePath && tortoisePath.trim()) {
@@ -521,6 +567,18 @@ app.whenReady().then(async () => {
 
   // 先确保后端启动完成，再创建窗口（防止前端拿到错误的默认端口）
   await startPythonBackend()
+
+  // 启动时检测远程开关
+  if (!await checkSwitch()) {
+    await dialog.showMessageBox({
+      type: 'error',
+      title: '权限不足',
+      message: '软件权限已被远程关闭',
+    })
+    app.quit()
+    return
+  }
+
   createWindow()
 })
 

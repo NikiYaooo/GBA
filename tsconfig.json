@@ -18,5 +18,9 @@
     "src/**/*.ts",
     "src/**/*.vue",
     "api"
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "vitest.config.ts"
   ]
 }

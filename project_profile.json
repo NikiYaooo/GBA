@@ -1,0 +1,18 @@
+{
+  "game_name": "Ever castle",
+  "genre": "SLG",
+  "world_setting": "西方童话",
+  "target_audience": "",
+  "terminology": {},
+  "template_sections": [
+    "背景",
+    "目标",
+    "规则",
+    "奖励",
+    "限制",
+    "UI"
+  ],
+  "design_principles": [
+    "界面说明必须解释操作功能和反馈"
+  ]
+}

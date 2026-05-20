@@ -12,4 +12,8 @@ import { ipcRenderer } from 'electron'
   runSvnUpdate: (folderPath: string, tortoisePath?: string) => ipcRenderer.invoke('run-svn-update', folderPath, tortoisePath),
   openPath: (targetPath: string) => ipcRenderer.invoke('open-path', targetPath),
   selectFolder: () => ipcRenderer.invoke('select-folder'),
+  quitApp: () => ipcRenderer.invoke('quit-app'),
+  onSwitchDenied: (callback: (msg: string) => void) => {
+    ipcRenderer.on('switch-denied', (_event, msg) => callback(msg))
+  },
 }

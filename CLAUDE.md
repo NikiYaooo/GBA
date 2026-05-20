@@ -46,10 +46,10 @@ Skills 位于 `.claude/skills/` 目录，每个 skill 有独立的 `SKILL.md` �
 
 以下规则对本项目的所有 Claude Code 对话生效：
 
-1. **版本号规则** — 版本号格式为 `大版本.小版本.bug修复`（例如 `1.1.5` 表示第1个大版本、第1个小版本、第5个bug修复版本）。每次开发完成时自动迭代版本号。
-2. **自动编译** — 每次开发完成后自动执行编译/构建。
-3. **自动推送** — 每个小版本迭代开发完成、编译通过后，自动将代码 push 到 GitHub (`git@github.com:NikiYaooo/GBA.git`)。
-4. **中文输出** — 每次对话都用中文回答，权限询问也帮我翻译为中文。
+1. **版本号规则** — 版本号从 `package.json` 的 `version` 字段读取。格式为 `大版本.小版本.bug修复`（例如 `2.6.12`）。每次开发完成时迭代版本号。
+2. **自动编译** — 每次开发完成后自动执行 `npm run build`（vue-tsc → vite → electron-builder），确保构建通过。
+3. **自动推送** — 每个版本开发完成、编译通过后，自动将代码 push 到 GitHub (`git@github.com:NikiYaooo/GBA.git`)。
+4. **中文输出** — 每次对话都用中文回答，权限询问也翻译为中文。
 
 # Codebase Overview
 
@@ -58,46 +58,103 @@ Skills 位于 `.claude/skills/` 目录，每个 skill 有独立的 `SKILL.md` �
 Electron desktop app with Vue 3 frontend (renderer) communicating via HTTP to a Python FastAPI backend (spawned as child process):
 
 ```
-Electron main.ts → spawns Python api/main.py (port 8000)
-         ↓                     ↕ HTTP (Axios)
-Vue 3 SPA (renderer)     FastAPI routers/
-  ↕ IPC (electronAPI)         ai_service.py
-Electron main process         kb_project.py (RAG)
-  (file dialogs, SVN,         document_parser.py
-   auto-start, etc.)          knowledge_base.py
+Electron main.ts                       Python backend (api/main.py)
+  └─ spawns Python on port 8000           ├─ FastAPI + Uvicorn + SwitchMiddleware
+  └─ IPC handlers:                        ├─ routers/ (12 modules)
+       file dialogs, SVN,                    image_gen.py  — 豆包Seedream生图/修改
+       auto-start, port mgmt                 knowledge_base.py — KB CRUD
+       backend lifecycle                     ai.py — 智能仿写/质检/逻辑补完
+                                             documents.py — 文档CRUD
+Vue 3 SPA (src/pages/HomePage.vue)           config.py, excel.py, prompts.py
+  ├─ 17 dialogs in components/dialogs/       image_library.py, reminders.py
+  ├─ 10 composables (useAI, useKnowledgeBase,  mindmap.py, template.py
+  │   useDocuments, useImageLibrary, ...)   ├─ ai_service.py (多模型调用)
+  ├─ Axios → apiUrl() → FastAPI             ├─ kb_project.py (RAG引擎)
+  └─ electronAPI (IPC bridge)               ├─ knowledge_base.py (多项目)
+  └─ switch interceptor (403 / X-Switch-Status) ├─ document_parser.py (docx→HTML)
+                                            └─ project_profile.py (项目画像)
+                                            └─ switch_checker.py (远程开关)
 ```
 
 ## Key Directories
 
 | Directory | Purpose |
 |---|---|
-| `api/` | Python FastAPI backend — routers/, ai_service.py, kb_project.py, knowledge_base.py |
-| `src/` | Vue 3 frontend — pages/HomePage.vue (SPA), components/dialogs/, composables/, utils/ |
+| `api/` | Python FastAPI backend — main.py (entry), routers/ (12 routers), service modules, switch_checker |
+| `api/routers/` | API 路由模块 — image_gen.py, knowledge_base.py, ai.py, documents.py, 等 |
+| `src/` | Vue 3 frontend — SPA in pages/, dialogs in components/dialogs/ |
+| `src/composables/` | Vue composables — useKnowledgeBase.ts, useAI.ts, useDocuments.ts, 等 |
 | `electron/` | Electron main.ts (Python lifecycle, IPC handlers) + preload.ts |
-| `tests/` | Python pytest tests for KBProject (29 tests) |
-| `data/` | Runtime data (config.json, KB data, uploads) |
+| `src/types/index.ts` | TypeScript 类型定义（共享给所有组件和composables） |
+| `src/utils/api.ts` | API 工具 — apiUrl(), getErrMsg(), scanPorts() |
+| `tests/` | Python pytest 测试 (44 tests: KB项目 + AI服务 + 图片编辑) |
+| `docs/superpowers/` | 设计规格文档 (specs/) 和实现计划 (plans/) |
 
-## Commands
+## Key Commands
 
-**Type check:** `npm run check` (vue-tsc -b)
-**Full build:** `npm run build` → vue-tsc → vite → electron-builder (output: release28/)
-**Vite only:** `npx vite build` (skip type check)
-**Python tests (from root):** `.venv\Scripts\python.exe -m pytest tests/ -v`
-**Dev mode:** `npm run dev` (Vite hot-reload, Electron main.ts loads VITE_DEV_SERVER_URL)
-**Start backend alone:** `.venv\Scripts\python.exe api/main.py`
+| Command | Description |
+|---|---|
+| `npm run check` | TypeScript 类型检查 (vue-tsc -b) |
+| `npm run build` | 完整构建: vue-tsc → vite → electron-builder → release28/ |
+| `npx vite build` | 仅 Vite 构建（跳过类型检查） |
+| `npm run dev` | 开发模式 — Vite HMR + Electron |
+| `.venv\Scripts\python.exe -m pytest tests/ -v` | 运行 Python 测试（44个） |
+| `.venv\Scripts\python.exe -m pytest tests/test_kb_project.py::test_name -v` | 单个测试 |
+| `.venv\Scripts\python.exe api/main.py` | 单独启动 Python 后端（端口8000） |
+
+## Architecture Details
+
+### 后端路由架构
+- `api/main.py` 初始化 FastAPI app、知识库、AI 服务，然后导入并注册所有 router 模块
+- 每个 router 独立处理一个 API 域，通过 `router.ai_service` 全局引用共享 AI 服务实例
+- 知识库多项目架构: `KnowledgeBase` (管理器) → `KBProject` (单个项目引擎，含向量检索+BM25)
+
+### 前端 Composables 模式
+- 每个功能域对应一个 composable，返回响应式状态和方法
+- HomePage.vue 导入所有 composable 实例，模板中通过 `kb.xxx`、`ai.xxx`、`docs.xxx` 等方式调用
+- `useExcel.ts` — 自定义表格编辑引擎：公式计算（calcFormula + 5遍收敛重算）、选区管理（多选/Shift扩展）、格式操作（加粗/字体/颜色/对齐）、撤销栈（15层深）、复制粘贴（公式引用偏移）、Sheet切换、行列操作。Excel 模式工具栏通过上下文分发调用此 composable
+- `useKnowledgeBase.ts` — 管理 KB 对话框状态：项目/文件夹/文档CRUD、搜索、备份、词库、切片配置
+- `useAI.ts` — 管理智能仿写/质检/逻辑补完 + PRD 多轮迭代 (`iterationHistory`, `runIteration`)
+- `useDocuments.ts` — 文档CRUD、上传（含扩展名自动分类、上传后立即插入列表）、筛选搜索
+- `useTools.ts` — 管理工具栏组件状态（图片工具、模板、SVN、提醒等）
+- `useTheme.ts` — 界面亮暗主题切换
+
+### Electron IPC 通道
+- `window.electronAPI` 通过 preload.ts 暴露
+- 关键通道: `toggle-auto-start`, `show-item-in-folder`, `save-file-as`, `select-local-image`, `run-svn-update`, `open-path`, `select-folder`, `restart-backend`, `test-ai-model`
+
+### 图片生成 (image_gen.py)
+- 支持三种模式: 文生图 (generate)、图片修改 (edit with mask) + 原生编辑 (_native_edit_ark)
+- 模型: 豆包 Seedream (ARK API), Qwen-Image 2 (DashScope), GPT-Image 2 (OpenAI)
+- 参考图限制: 最多 4 张，data URI 格式需去除前缀后传给 ARK API
+- 前端画板: Canvas 2D 遮罩绘制 (画笔/橡皮擦)
+
+### 远程开关 (switch_checker.py)
+- 启动时和执行每个功能前/后检查 `https://github.com/NikiYaooo/GBA-switch/blob/main/switch.txt`
+- 后端 SwitchMiddleware: 403 阻断 + X-Switch-Status 响应头
+- Electron main.ts: `checkSwitch()` IPC guard 拦截功能调用
+- 前端 Axios 拦截器: 检测 403 和 X-Switch-Status: off，提示后退出
+
+### 项目画像 (project_profile.py)
+- 存储游戏项目的核心设定（游戏名、类型、世界观、系统、数值等）
+- AI 生成时作为约束注入提示词，防止自创设定
+
+### 数据存储
+- 所有运行时数据存储在 `%APPDATA%\GameBuilderAIHelper\`（或 `GB_DATA_DIR` 覆盖）
+- 存储为 JSON 文件 + numpy 向量 (.npy)
+- 构建时 `api/` 目录打包到 `resources/api/` 中
 
 ## Build Details
 
-- `electron-builder` config in `package.json` → `build` section
-- Output: `release28/游戏策划AI文档助手.exe` (Win portable)
-- Bundles: `dist/`, `dist-electron/`, `api/` (as `resources/api/`)
-- Electron version: 27.3.11
+- `electron-builder` 配置在 `package.json` → `build` 字段
+- 输出: `release28/游戏策划AI文档助手.exe` (Win portable，~300MB)
+- 打包内容: `dist/`, `dist-electron/`, `api/` (resources/api/)
+- Electron 27.3.11, 需安装 `python-3.10+` 和 `pip install -r requirements.txt`
 
-## Architecture Notes
+## Testing Notes
 
-- **Single page app:** All UI is in `src/pages/HomePage.vue` (66KB), dialogs are modular in `src/components/dialogs/` (16 dialogs)
-- **Backend port:** Default 8000, configurable via `GB_PORT` env var
-- **Frontend → Backend discovery:** tries IPC URL first, then scans ports 8000-8010
-- **No frontend tests** — only Python backend pytest tests exist
-- **Venv:** `.venv\Scripts\python.exe` — must have `pip install -r requirements.txt` for builds
-- **Version scheme:** `major.minor.bugfix` (currently 2.6.10), bump on each release build
+- **只有 Python 后端测试**，无前端测试
+- 测试文件: `tests/test_kb_project.py` (KBProject), `tests/test_ai_service.py` (AI服务), `tests/test_image_edit.py` (图片编辑遮罩)
+- 共 44 个测试
+- KBProject 测试使用 `tempfile.mkdtemp` 创建临时项目目录，测试后 `shutil.rmtree` 清理
+- 测试需要从项目根目录运行（Python path 包含 api/ 目录）

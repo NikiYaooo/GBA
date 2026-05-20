@@ -177,6 +177,35 @@ class PRDSelfCheck:
 
         return issues
 
+    def check_consistency(self, content: str) -> list:
+        """轻量级规则一致性检查（不调 AI）。返回问题列表。"""
+        import re
+        issues = []
+
+        # 1. 检查矛盾关键词组合
+        contradiction_pairs = [
+            (r'不限次数', r'限.*次'),
+            (r'永久', r'限时'),
+            (r'免费', r'付费'),
+            (r'所有玩家', r'仅.*VIP|仅.*会员'),
+        ]
+        for pos_pattern, neg_pattern in contradiction_pairs:
+            if re.search(pos_pattern, content) and re.search(neg_pattern, content):
+                issues.append(f"可能存在矛盾: 「{pos_pattern}」和「{neg_pattern}」同时出现")
+
+        # 2. 检查模糊词
+        fuzzy_terms = ['若干', '适量', '一些', '大概', '可能', '左右', '适当']
+        for term in fuzzy_terms:
+            if term in content:
+                issues.append(f"存在不明确表述: 「{term}」")
+
+        # 3. 检查缺失结束时间
+        if any(word in content for word in ['活动', '签到', '限时']):
+            if not re.search(r'结束|截止|到期|持续时间?|下线', content):
+                issues.append("活动类文档缺少结束时间/持续时间说明")
+
+        return issues
+
     def log_rewrite(self, reasons: List[str], model: str):
         """记录一次重写的原因，用于后续增强提示词。"""
         entry = {

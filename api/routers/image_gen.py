@@ -26,8 +26,6 @@ def _get_config():
 
 IMAGE_MODEL_ENDPOINTS = {
     "GPT-Image 2": "https://api.openai.com/v1/images/generations",
-    "Midjourney": "",
-    "Google Banana": "",
     "豆包Seedream": "",
     "Stable Diffusion（本地）": "",
 }
@@ -426,16 +424,14 @@ async def generate_image(payload: dict = Body(...)):
         }
         if reference_images:
             # ARK API 需要 raw base64（去掉 data:image/...;base64, 前缀）
-            # 并包装为 {"image": "<base64>", "strength": 0.8} 格式
-            processed_refs = []
-            for img in reference_images[:4]:
-                if isinstance(img, str):
-                    raw = img
-                    if raw.startswith('data:'):
-                        raw = raw.split(',', 1)[-1] if ',' in raw else raw
-                    processed_refs.append({"image": raw, "strength": 0.8})
-            if processed_refs:
-                body["reference_images"] = processed_refs
+            # 参考图作为顶层 image + strength 参数传递
+            ref = reference_images[0]
+            if isinstance(ref, str):
+                raw = ref
+                if raw.startswith('data:'):
+                    raw = raw.split(',', 1)[-1] if ',' in raw else raw
+                body["image"] = raw
+                body["strength"] = 0.9
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(endpoint, json=body, headers=headers)
@@ -526,8 +522,7 @@ async def generate_image(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"连接失败: {str(e)}"}
 
-    # Midjourney / Google Banana — not yet implemented
-    return {"success": False, "message": f"{model_name} 暂未实现，敬请期待"}
+    return {"success": False, "message": f"不支持的图片模型: {model_name}"}
 
 
 @router.post("/api/image/test-model")
@@ -594,8 +589,7 @@ async def test_image_model(payload: dict = Body(...)):
         except Exception as e:
             return {"success": False, "message": f"连接异常: {str(e)}"}
 
-    # Midjourney / Google Banana
-    return {"success": False, "message": f"{model_name} 暂不支持连接测试"}
+    return {"success": False, "message": f"不支持的图片模型: {model_name}"}
 
 
 # ========== 图片编辑辅助函数 ==========
