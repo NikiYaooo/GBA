@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Body
 from ai_service import AIService
+from knowledge_extractor import KnowledgeExtractor
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -47,9 +48,66 @@ async def imitate(payload: dict = Body(...)):
             images=images, project_id=project_id,
             kb_only=kb_only, cite_sources=cite_sources,
         )
-        return {"success": True, "data": result}
+        return {
+            "success": True,
+            "data": result.get("content", ""),
+            "metadata": {
+                "knowledge_coverage": result.get("knowledge_coverage"),
+                "consistency_score": result.get("consistency_score"),
+                "conflicts": result.get("conflicts", []),
+            }
+        }
     except Exception as e:
         return {"success": False, "message": f"AI 服务调用失败: {str(e)}"}
+
+
+@router.post("/confirm-generation")
+async def confirm_generation(payload: dict = Body(...)):
+    """用户确认生成结果后，提炼知识并回写知识库。"""
+    content = payload.get("content", "")
+    project_id = payload.get("project_id", "")
+
+    if not content or not project_id:
+        raise HTTPException(status_code=400, detail="内容或项目ID不能为空")
+
+    try:
+        svc = get_ai_service()
+        kb_project = None
+        if svc.kb and project_id:
+            kb_project = svc.kb.get_project(project_id)
+
+        if not kb_project:
+            return {"success": False, "message": "未找到对应项目知识库"}
+
+        # Load project profile (terminology)
+        profile = {}
+        try:
+            from routers.project_profile import load_profile
+            profile = load_profile()
+        except Exception:
+            pass
+
+        # Search existing KB entries for duplicate check
+        kb_entries = []
+        try:
+            kb_entries = kb_project.search(content[:200], top_k=5)
+        except Exception:
+            pass
+
+        extractor = KnowledgeExtractor(kb_project, profile)
+        extract_result = extractor.extract(content, kb_entries)
+        summary = extractor.write_back(extract_result)
+
+        return {
+            "success": True,
+            "data": {
+                "added_to_kb": summary.added_to_kb,
+                "updated_profile": summary.updated_profile,
+                "drafts": summary.drafts,
+            }
+        }
+    except Exception as e:
+        return {"success": False, "message": f"知识提炼失败: {str(e)}"}
 
 
 @router.post("/imitate-iterate")
