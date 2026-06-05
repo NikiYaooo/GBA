@@ -30,7 +30,7 @@ CITATION_RULES = """
 """
 
 CITATION_PATTERN = re.compile(
-    r'\[(参考|基于|设计|建议修改)[：:]\s*(.*?)\]'
+    r'\[(参考|基于|设计|建议修改)(?:[：:]\s*(.*?))?\]'
 )
 
 
@@ -47,8 +47,7 @@ class CitationEnhancer:
         extra_parts = [CITATION_RULES]
 
         from api.knowledge_checker import KnowledgeChecker
-        checker = KnowledgeChecker.__new__(KnowledgeChecker)
-        knowledge_section = checker.format_check_result(check_result)
+        knowledge_section = KnowledgeChecker.format_check_result(check_result)
 
         if knowledge_section:
             extra_parts.append(knowledge_section)
@@ -77,7 +76,7 @@ class CitationEnhancer:
             claim = response[claim_start:start].strip().split("\n")[-1][:30]
 
             tag_type = match.group(1)
-            source = match.group(2).strip() or None
+            source = match.group(2).strip() if match.group(2) else None
 
             type_map = {
                 "参考": "reference",

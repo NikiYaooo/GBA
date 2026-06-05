@@ -108,7 +108,8 @@ class KnowledgeChecker:
 
         return missing[:5]
 
-    def format_check_result(self, result: KnowledgeCheckResult) -> str:
+    @staticmethod
+    def format_check_result(result: KnowledgeCheckResult) -> str:
         """将检查结果格式化为提示词中的两个区块。"""
         parts = []
 
