@@ -89,3 +89,33 @@ def test_parse_no_citations(enhancer):
     assert clean == response
     assert citations == []
     assert metrics.total_claims == 0
+
+
+def test_enhance_prompt_kb_only(enhancer, sample_check_result):
+    """kb_only=True 时应包含额外约束。"""
+    enhanced = enhancer.enhance_prompt("test", sample_check_result, kb_only=True)
+    assert "仅基于知识库" in enhanced
+
+
+def test_parse_suggest_modify(enhancer):
+    """独立 [建议修改] 标注应正确解析。"""
+    response = "暴击率设为60%可能过高。[建议修改]"
+    clean, citations, metrics = enhancer.parse_citations_from_response(response)
+    assert any(c.type == "suggest_modify" for c in citations)
+    assert clean == "暴击率设为60%可能过高。"
+
+
+def test_parse_extension_type(enhancer):
+    """[基于：...] 标注应识别为 extension 类型。"""
+    response = "1-5级消耗100金币。[基于：强化系统设计.docx]"
+    clean, citations, metrics = enhancer.parse_citations_from_response(response)
+    assert any(c.type == "extension" for c in citations)
+    assert "强化系统设计.docx" in str(citations)
+
+
+def test_parse_halfwidth_colon(enhancer):
+    """半角冒号也应支持。"""
+    response = "强化上限+15。[参考:数值设计规范.docx]"
+    clean, citations, metrics = enhancer.parse_citations_from_response(response)
+    assert any(c.type == "reference" for c in citations)
+    assert citations[0].source == "数值设计规范.docx"

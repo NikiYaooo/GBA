@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Literal
 
+from api.knowledge_checker import KnowledgeChecker, KnowledgeCheckResult
+
 
 @dataclass
 class Citation:
@@ -38,7 +40,7 @@ class CitationEnhancer:
     """在生成前增强提示词，生成后解析引用标注。"""
 
     def enhance_prompt(
-        self, base_prompt: str, check_result, kb_only: bool = False
+        self, base_prompt: str, check_result: KnowledgeCheckResult, kb_only: bool = False
     ) -> str:
         """在 base_prompt 末尾注入引用规则，在知识清单不为空时追加知识清单。"""
         if not check_result.existing and not check_result.partial and not check_result.missing:
@@ -46,7 +48,6 @@ class CitationEnhancer:
 
         extra_parts = [CITATION_RULES]
 
-        from api.knowledge_checker import KnowledgeChecker
         knowledge_section = KnowledgeChecker.format_check_result(check_result)
 
         if knowledge_section:
