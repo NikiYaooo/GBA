@@ -46,6 +46,7 @@ def test_check_returns_correct_categories(kb_with_docs):
     assert len(result.existing) >= 1
     assert hasattr(result, "coverage_ratio")
     assert 0 <= result.coverage_ratio <= 1
+    assert len(result.existing) + len(result.partial) >= 1
 
 
 def test_check_empty_kb():
@@ -67,8 +68,9 @@ def test_check_empty_kb():
 def test_format_check_result(kb_with_docs):
     """format_check_result 应生成包含'已有设定'和'未覆盖'两个区块的文本。"""
     checker = KnowledgeChecker(kb_with_docs)
-    result = checker.check("装备强化")
+    result = checker.check("装备强化签到")
     text = checker.format_check_result(result)
-    assert "已有设定" in text or "知识库" in text
+    assert "已有设定" in text
+    assert "未覆盖" in text or "自行设计" in text
     assert isinstance(text, str)
     assert len(text) > 0

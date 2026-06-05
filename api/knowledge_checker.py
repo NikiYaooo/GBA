@@ -33,7 +33,7 @@ class KnowledgeChecker:
 
     def __init__(self, kb_project):
         self.kb = kb_project
-        self.thresholds = {"existing": 0.03, "partial": 0.01}
+        self.thresholds = {"existing": 0.03, "partial": 0.01}  # RRF k=60 时分数范围约 0.01-0.033
 
     def check(self, query: str) -> KnowledgeCheckResult:
         """检索知识库，将结果按相似度阈值分为已有/部分/缺失三层。"""
@@ -43,7 +43,11 @@ class KnowledgeChecker:
         try:
             all_results = self.kb.search(query, top_k=10)
         except Exception:
-            return KnowledgeCheckResult(existing=[], partial=[], missing=[], coverage_ratio=0.0)
+            return KnowledgeCheckResult(
+                existing=[], partial=[],
+                missing=self._extract_missing_topics(query, []),
+                coverage_ratio=0.0,
+            )
 
         existing = []
         partial = []
