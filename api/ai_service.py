@@ -273,11 +273,14 @@ class AIService:
         ]
         return await self._call_api(model, messages)
 
-    async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True, output_format: str = "markdown", template_content: str = "", images: list = None, project_id: str = "", kb_only: bool = False, cite_sources: bool = False) -> str:
+    async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True, output_format: str = "markdown", template_content: str = "", images: list = None, project_id: str = "", kb_only: bool = False, cite_sources: bool = False) -> dict:
         """增强版智能仿写：多分类 RAG + 知识约束 + 模板强制 + 自检重写 + 优化提示词"""
 
         # ======== Step 0: 判断是否启用流水线模式 ========
         use_pipeline = len(requirements) > 200 or "分节" in requirements or "大纲" in requirements
+        knowledge_check_result = None
+        kb_project = None
+        consistency_result = None
 
         if use_pipeline:
             outline = await self._generate_outline(requirements, model, project_id)
@@ -308,6 +311,14 @@ class AIService:
                         categories=["世界观", "系统", "数值", "模板", "规范", "UI"],
                         top_k_per_category=3,
                     )
+
+            # ======== Knowledge Check ========
+            if project_id and self.kb:
+                kb_project = self.kb.get_project(project_id)
+            if kb_project:
+                from api.knowledge_checker import KnowledgeChecker
+                kc = KnowledgeChecker(kb_project)
+                knowledge_check_result = kc.check(requirements)
 
             # ======== Step 2: 构建知识约束和 RAG 上下文 ========
             knowledge_sections = []
@@ -387,6 +398,12 @@ class AIService:
         【额外约束 - 仅基于知识库】
         你只能使用上面提供的「项目已有设定」内容来生成文档。如果知识库中没有相关信息，请明确说明「知识库中无此设定，无法生成」。严禁编造任何知识库中没有的世界观、系统、数值、角色、玩法等内容。"""
 
+            # ======== Citation Enhancement ========
+            if knowledge_check_result:
+                from api.citation_enhancer import CitationEnhancer
+                ce = CitationEnhancer()
+                system_prompt = ce.enhance_prompt(system_prompt, knowledge_check_result, kb_only)
+
             messages = [{"role": "system", "content": system_prompt}]
 
             vision_models = {"GPT", "Gemini"}
@@ -454,6 +471,17 @@ class AIService:
                     else:
                         break  # 重写失败，保留原版
 
+            # ======== Consistency Check ========
+            if kb_project and response:
+                from api.consistency_checker import ConsistencyChecker
+                cc = ConsistencyChecker(kb_project)
+                consistency_result = cc.check(response)
+                if consistency_result.score < 0.6 and self.checker:
+                    self.checker.log_rewrite(
+                        [f"一致性评分{consistency_result.score}，发现{len(consistency_result.conflicts)}处冲突"],
+                        model
+                    )
+
         # ======== Step 7: 添加标注并格式化 ========
         rag_contexts = rag_contexts if not use_pipeline else {}
         has_images = images and len(images) > 0
@@ -484,7 +512,20 @@ class AIService:
         if output_format == "html":
             response = self._md_to_html(response)
 
-        return response
+        return {
+            "content": response,
+            "knowledge_coverage": round(knowledge_check_result.coverage_ratio, 2) if knowledge_check_result else None,
+            "consistency_score": consistency_result.score if consistency_result is not None else None,
+            "conflicts": [
+                {
+                    "level": c.level,
+                    "paragraph": c.paragraph[:100],
+                    "suggestion": c.fix_suggestion or "",
+                    "source_file": c.source_file,
+                }
+                for c in (consistency_result.conflicts if consistency_result else [])
+            ],
+        }
 
     async def imitate_iterate(
         self, model: str, full_doc: str, instruction: str,
