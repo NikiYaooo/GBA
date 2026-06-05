@@ -60,6 +60,7 @@ def test_check_empty_kb():
         result = checker.check("设计签到系统")
         assert len(result.existing) == 0
         assert len(result.partial) == 0
+        assert len(result.missing) > 0  # 应检测到未覆盖的主题
         assert result.coverage_ratio == 0.0
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
