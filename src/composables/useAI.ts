@@ -4,6 +4,19 @@ import { apiUrl, getErrMsg } from '@/utils/api'
 import type { ApiResponse } from '@/types'
 import { TEXT_MODELS, DEFAULT_TEXT_MODEL } from '@/model-defs'
 
+export interface ImitationConflict {
+  level: string
+  paragraph: string
+  suggestion: string
+  source_file: string
+}
+
+export interface ImitationMeta {
+  knowledge_coverage: number | null
+  consistency_score: number | null
+  conflicts: ImitationConflict[]
+}
+
 export function useAI() {
   const activeModel = ref(DEFAULT_TEXT_MODEL)
   const aiResult = ref('')
@@ -11,6 +24,7 @@ export function useAI() {
   const iterativePrompt = ref('')
 
   const models = ref([...TEXT_MODELS])
+  const imitationMeta = ref<ImitationMeta | null>(null)
 
   // 迭代修改相关
   const iterationHistory = ref<{
@@ -32,11 +46,17 @@ export function useAI() {
   }
 
   const runImitation = async (requirements: string, context = '', useRag = true, format = 'html', templateContent = '', images: string[] = [], projectId = '', kbOnly = false, citeSources = false): Promise<string | null> => {
-    const r = await axios.post<ApiResponse<string>>(apiUrl('/api/ai/imitate'), {
+    const r = await axios.post<any>(apiUrl('/api/ai/imitate'), {
       model: activeModel.value, requirements, context, use_rag: useRag, format, template_content: templateContent, images,
       project_id: projectId || undefined, kb_only: kbOnly, cite_sources: citeSources
     })
-    if (r.data.success) return r.data.data || null
+    if (r.data.success) {
+      if (r.data.metadata) {
+        imitationMeta.value = r.data.metadata as ImitationMeta
+      }
+      return r.data.data || null
+    }
+    imitationMeta.value = null
     return null
   }
 
@@ -56,6 +76,26 @@ export function useAI() {
   const generateDocTitle = (requirements: string): string => {
     const titleMatch = requirements.match(/(.+?)(系统|活动|玩法|功能|模块)/)
     return titleMatch ? `[${titleMatch[1]}${titleMatch[2]}]策划案` : '[策划案]'
+  }
+
+  const confirmGeneration = async (content: string, projectId: string) => {
+    if (!content || !projectId) return null
+    try {
+      const r = await axios.post(apiUrl('/api/ai/confirm-generation'), {
+        content, project_id: projectId
+      })
+      if (r.data.success) {
+        return r.data.data
+      }
+      return null
+    } catch (e) {
+      console.error('确认生成失败:', e)
+      return null
+    }
+  }
+
+  const clearImitationMeta = () => {
+    imitationMeta.value = null
   }
 
   const runIteration = async (
@@ -98,7 +138,7 @@ export function useAI() {
   return {
     activeModel, models, aiResult, isProcessing, iterativePrompt,
     runQualityCheck, runImitation, runLogicCompletion, iterate, generateDocTitle,
-    runIteration, iterationHistory,
+    runIteration, iterationHistory, imitationMeta, confirmGeneration, clearImitationMeta,
     showIterationPanel, iterationInput, isIterating,
   }
 }

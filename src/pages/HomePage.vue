@@ -767,7 +767,30 @@ const clearResult = async () => {
     await ElMessageBox.confirm('确定清除AI分析结果？', '确认', { type: 'warning' })
     ai.aiResult.value = ''
     ai.iterativePrompt.value = ''
+    ai.clearImitationMeta()
   } catch { /* */ }
+}
+
+const handleConfirmGeneration = async () => {
+  const content = ai.aiResult.value
+  const projectId = kb.activeProjectId.value
+  if (!content || !projectId) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  ai.isProcessing.value = true
+  try {
+    const result = await ai.confirmGeneration(content, projectId)
+    if (result) {
+      ElMessage.success(`知识已学习！新增 ${result.added_to_kb} 条，更新 ${result.updated_profile?.length || 0} 条术语`)
+    } else {
+      ElMessage.warning('知识学习完成，但未返回摘要')
+    }
+  } catch (e) {
+    ElMessage.error('知识学习失败')
+  } finally {
+    ai.isProcessing.value = false
+  }
 }
 
 // --- KB handlers ---
@@ -1304,6 +1327,60 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
             <div v-if="!ai.aiResult.value && !ai.isProcessing.value" class="h-full flex items-center justify-center text-zinc-300 italic">等待功能触发...</div>
             <div v-else class="whitespace-pre-wrap">{{ ai.aiResult.value }}</div>
             <div v-if="ai.isProcessing.value" class="flex items-center gap-2 mt-2 text-blue-500"><el-icon class="is-loading"><RefreshCw /></el-icon>AI 正在思考中...</div>
+          </div>
+          <!-- Self-learning metadata bar -->
+          <div v-if="ai.imitationMeta.value && aiResultTab === 'result'" class="mt-2 px-1">
+            <div class="flex items-center gap-3 text-xs flex-wrap">
+              <!-- Knowledge coverage -->
+              <div v-if="ai.imitationMeta.value.knowledge_coverage !== null"
+                   class="flex items-center gap-1 px-2 py-0.5 rounded-full"
+                   :class="ai.imitationMeta.value.knowledge_coverage >= 0.6 ? 'bg-green-50 text-green-700' : ai.imitationMeta.value.knowledge_coverage >= 0.3 ? 'bg-yellow-50 text-yellow-700' : 'bg-red-50 text-red-700'">
+                <span class="font-medium">知识覆盖</span>
+                <span>{{ Math.round(ai.imitationMeta.value.knowledge_coverage * 100) }}%</span>
+              </div>
+
+              <!-- Consistency score -->
+              <div v-if="ai.imitationMeta.value.consistency_score !== null"
+                   class="flex items-center gap-1 px-2 py-0.5 rounded-full"
+                   :class="ai.imitationMeta.value.consistency_score >= 0.8 ? 'bg-green-50 text-green-700' : ai.imitationMeta.value.consistency_score >= 0.5 ? 'bg-yellow-50 text-yellow-700' : 'bg-red-50 text-red-700'">
+                <span class="font-medium">一致性评分</span>
+                <span>{{ Math.round(ai.imitationMeta.value.consistency_score * 100) }}%</span>
+              </div>
+
+              <!-- Conflict count badge -->
+              <div v-if="ai.imitationMeta.value.conflicts && ai.imitationMeta.value.conflicts.length > 0"
+                   class="flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+                <span class="font-medium">冲突</span>
+                <span>{{ ai.imitationMeta.value.conflicts.length }} 处</span>
+              </div>
+
+              <!-- Spacer -->
+              <div class="flex-1" />
+
+              <!-- Confirm & Learn button -->
+              <el-button
+                v-if="ai.imitationMeta.value && ai.imitationMeta.value.knowledge_coverage !== null"
+                size="small"
+                type="success"
+                plain
+                @click="handleConfirmGeneration"
+              >
+                <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
+                确认并学习
+              </el-button>
+            </div>
+
+            <!-- Conflict details (if any) -->
+            <div v-if="ai.imitationMeta.value.conflicts && ai.imitationMeta.value.conflicts.length > 0" class="mt-1">
+              <div v-for="(c, i) in ai.imitationMeta.value.conflicts.slice(0, 3)" :key="i"
+                   class="text-[11px] text-red-600 pl-2 border-l-2 border-red-300 mt-1">
+                <span class="font-medium">{{ c.level === 'high' ? '⚠️' : '⚡' }}</span>
+                {{ c.paragraph }} — {{ c.suggestion || c.source_file }}
+              </div>
+              <div v-if="ai.imitationMeta.value.conflicts.length > 3" class="text-[11px] text-app-muted mt-1">
+                还有 {{ ai.imitationMeta.value.conflicts.length - 3 }} 处冲突...
+              </div>
+            </div>
           </div>
           <div v-if="ai.aiResult.value && !ai.isProcessing.value" class="mt-2 pt-2 border-t border-app">
             <div class="flex gap-2">
