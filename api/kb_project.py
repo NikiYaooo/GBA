@@ -1037,3 +1037,23 @@ class KBProject:
         self._rebuild_bm25()
         self._save_state()
         return {"success": True, "message": f"重向量化完成，共 {len(new_chunks)} 个文本块"}
+
+    def add_text_knowledge(self, text: str, category: str = "通用", source: str = "AI生成") -> bool:
+        """添加一段纯文本知识到知识库（不经过文件系统），用于程序化知识回写。"""
+        doc_id = f"ai_{uuid.uuid4().hex[:12]}"
+
+        doc = {
+            "id": doc_id,
+            "filename": f"{source}_{category}.md",
+            "content": text,
+            "doc_type": "text",
+            "file_size": len(text.encode("utf-8")),
+            "folder_id": category,
+            "status": "pending",
+            "created_at": time.time(),
+        }
+        self.documents.append(doc)
+
+        self._chunk_document(doc_id, text)
+        self._save_state()
+        return True
