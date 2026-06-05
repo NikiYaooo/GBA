@@ -2,6 +2,7 @@ import os
 import json
 import time
 from typing import List, Dict, Any, Optional
+from api.consistency_checker import ConsistencyChecker
 
 
 class PRDSelfCheck:
@@ -205,6 +206,55 @@ class PRDSelfCheck:
                 issues.append("活动类文档缺少结束时间/持续时间说明")
 
         return issues
+
+    def check_and_validate(self, content: str, kb_project=None) -> dict:
+        """Run both format check and knowledge-consistency check.
+
+        Args:
+            content: The generated PRD text to validate.
+            kb_project: KBProject instance (can be None, in which case only
+                        format check runs).
+
+        Returns:
+            {
+                "passed": bool,
+                "format_issues": List[str],
+                "consistency_issues": List[Conflict],
+                "consistency_score": float,
+                "all_reasons": List[str],  # merged from both checks
+            }
+        """
+        # 1. Run format/layout check (existing check without kb_contexts)
+        fmt_result = self.check(content)
+        format_issues = fmt_result.get("reasons", [])
+
+        # 2. Run knowledge-consistency check if KB is available
+        consistency_conflicts = []
+        consistency_score = 1.0
+
+        if kb_project is not None:
+            checker = ConsistencyChecker(kb_project)
+            c_result = checker.check(content)
+            consistency_conflicts = c_result.conflicts
+            consistency_score = c_result.score
+
+        # 3. Merge reasons from both checks
+        consistency_reasons = [
+            c.paragraph + " : " + (c.fix_suggestion or "")
+            for c in consistency_conflicts
+        ]
+        all_reasons = format_issues + consistency_reasons
+
+        # 4. Overall pass only if both checks pass
+        passed = len(format_issues) == 0 and len(consistency_conflicts) == 0
+
+        return {
+            "passed": passed,
+            "format_issues": format_issues,
+            "consistency_issues": consistency_conflicts,
+            "consistency_score": consistency_score,
+            "all_reasons": all_reasons,
+        }
 
     def log_rewrite(self, reasons: List[str], model: str):
         """记录一次重写的原因，用于后续增强提示词。"""

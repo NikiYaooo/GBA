@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api.consistency_checker import ConsistencyChecker, Conflict, ConsistencyResult
 from api.kb_project import KBProject
+from api.prd_self_check import PRDSelfCheck
 
 
 @pytest.fixture
@@ -62,3 +63,20 @@ def test_empty_output_returns_empty_result(kb_with_numeric_rules):
     result = checker.check("")
     assert len(result.conflicts) == 0
     assert result.score == 1.0
+
+
+def test_check_and_validate_integration(kb_with_numeric_rules):
+    """Test PRDSelfCheck.check_and_validate with both format and consistency checks."""
+    from api.prd_self_check import PRDSelfCheck
+
+    checker = PRDSelfCheck(data_dir=tempfile.mkdtemp())
+    content = "装备强化上限为+20，达到后不可继续。"
+    result = checker.check_and_validate(content, kb_with_numeric_rules)
+
+    assert "passed" in result
+    assert "format_issues" in result
+    assert "consistency_issues" in result
+    assert "consistency_score" in result
+    assert "all_reasons" in result
+    # Should have consistency issues (上限+20 vs +15)
+    # imported tempfile and shutil used for cleanup
