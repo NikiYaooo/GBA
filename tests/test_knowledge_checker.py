@@ -44,7 +44,6 @@ def test_check_returns_correct_categories(kb_with_docs):
     result = checker.check("装备强化系统设计，包含强化消耗和概率")
     assert isinstance(result, KnowledgeCheckResult)
     assert len(result.existing) >= 1
-    assert hasattr(result, "coverage_ratio")
     assert 0 <= result.coverage_ratio <= 1
     assert len(result.existing) + len(result.partial) >= 1
 

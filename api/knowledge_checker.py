@@ -7,7 +7,7 @@ from typing import List, Optional
 
 @dataclass
 class KBCoverageItem:
-    topic: str
+    excerpt: str
     content: str
     source: str
     similarity: float
@@ -45,7 +45,7 @@ class KnowledgeChecker:
         except Exception:
             return KnowledgeCheckResult(
                 existing=[], partial=[],
-                missing=self._extract_missing_topics(query, []),
+                missing=[],
                 coverage_ratio=0.0,
             )
 
@@ -60,17 +60,17 @@ class KnowledgeChecker:
             source = meta.get("filename", "") if isinstance(meta, dict) else ""
             category = meta.get("category", "通用") if isinstance(meta, dict) else "通用"
 
-            topic = content[:20].strip().rstrip("，。；")
+            excerpt = content[:20].strip().rstrip("，。；")
 
             if similarity >= self.thresholds["existing"]:
                 existing.append(KBCoverageItem(
-                    topic=topic, content=content, source=source,
+                    excerpt=excerpt, content=content, source=source,
                     similarity=similarity, category=category,
                 ))
                 known_texts.append(content)
             elif similarity >= self.thresholds["partial"]:
                 partial.append(KBCoverageItem(
-                    topic=topic, content=content, source=source,
+                    excerpt=excerpt, content=content, source=source,
                     similarity=similarity, category=category,
                 ))
                 known_texts.append(content)
@@ -90,7 +90,7 @@ class KnowledgeChecker:
     def _extract_missing_topics(self, query: str, known_texts: List[str]) -> List[MissingTopic]:
         """从查询中提取知识库未覆盖的主题词。"""
         known_combined = " ".join(known_texts)
-        tokens = re.findall(r'[一-鿿]{2,6}', query)
+        tokens = re.findall(r'[A-Za-z0-9]{2,}|[一-鿿]{2,6}', query)
         stop_words = {"设计", "系统", "功能", "实现", "制作", "开发", "需求", "文档",
                        "策划", "方案", "规划", "流程", "规则", "配置", "一个"}
 
