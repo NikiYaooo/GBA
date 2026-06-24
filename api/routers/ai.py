@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, UploadFile, File
 from ai_service import AIService
+import io
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -13,15 +14,35 @@ async def quality_check(payload: dict = Body(...)):
     model = payload.get("model", "DeepSeek")
     content = payload.get("content", "")
     system_prompt = payload.get("system_prompt", "")
+    reference_content = payload.get("reference_content", "")
+    config_description = payload.get("config_description", "")
 
     if not content:
         raise HTTPException(status_code=400, detail="内容不能为空")
 
     try:
-        result = await get_ai_service().quality_check(model, content, system_prompt=system_prompt or None)
+        result = await get_ai_service().quality_check(
+            model, content, system_prompt=system_prompt or None,
+            reference_content=reference_content or None,
+            config_description=config_description or None
+        )
         return {"success": True, "data": result}
     except Exception as e:
         return {"success": False, "message": f"AI 服务调用失败: {str(e)}"}
+
+
+@router.post("/parse-docx")
+async def parse_docx(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.endswith('.docx'):
+        raise HTTPException(status_code=400, detail="仅支持 .docx 文件")
+    try:
+        content = await file.read()
+        from docx import Document
+        doc = Document(io.BytesIO(content))
+        text = "\n".join(p.text for p in doc.paragraphs)
+        return {"text": text}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"解析失败: {str(e)}")
 
 
 @router.post("/imitate")

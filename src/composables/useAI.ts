@@ -23,9 +23,11 @@ export function useAI() {
   const iterationInput = ref('')
   const isIterating = ref(false)
 
-  const runQualityCheck = async (content: string, systemPrompt?: string): Promise<string | null> => {
+  const runQualityCheck = async (content: string, systemPrompt?: string, referenceContent?: string, configDescription?: string): Promise<string | null> => {
     const r = await axios.post<ApiResponse<string>>(apiUrl('/api/ai/quality-check'), {
-      model: activeModel.value, content, system_prompt: systemPrompt || ''
+      model: activeModel.value, content, system_prompt: systemPrompt || '',
+      reference_content: referenceContent || '',
+      config_description: configDescription || ''
     })
     if (r.data.success) return r.data.data || null
     return null

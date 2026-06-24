@@ -109,11 +109,15 @@ export function useExcel() {
   const excelData = ref<ExcelState | null>(null)
   const excelFilePath = ref('')
   const excelFillColor = ref('#ffff00')  // 默认黄色
+  const excelTextColor = ref('#000000')   // 默认黑色
   const selectedCell = ref<CellCoord | null>(null)
   const selectionAnchor = ref<CellCoord | null>(null)
   const editCell = ref<CellCoord | null>(null)
   const copiedData = ref<CellData[][] | null>(null)
   const contextMenu = ref<ContextMenuState>({ show: false, x: 0, y: 0, ri: -1, ci: -1 })
+  const isDragging = ref(false)
+  /** 拖拽过程中是否真的移动过（区分点击和拖拽） */
+  const dragDidMove = ref(false)
   const colWidths = ref<Record<number, number>>({})
   const editingFormula = ref('')
   const undoStack = ref<string[]>([])
@@ -324,6 +328,7 @@ export function useExcel() {
 
   const selectCell = (ri: number, ci: number, shiftKey = false) => {
     if (editCell.value) return  // 编辑中不响应选区变化
+    if (dragDidMove.value) { dragDidMove.value = false; return }  // 拖拽后不重置选区
     if (shiftKey && selectionAnchor.value) {
       // Shift+Click 扩展选区
       selectedCell.value = { ri, ci }
@@ -832,6 +837,36 @@ export function useExcel() {
 
   const closeContextMenu = () => { contextMenu.value.show = false }
 
+  // ========== 鼠标拖拽多选 ==========
+
+  const startDragSelect = (ri: number, ci: number, e: MouseEvent) => {
+    if (e.button !== 0) return  // 仅左键
+    endEdit(true)
+    isDragging.value = true
+    dragDidMove.value = false
+    selectionAnchor.value = { ri, ci }
+    selectedCell.value = { ri, ci }
+    closeContextMenu()
+    const sheet = getSheet()
+    if (sheet && sheet.rows[ri] && sheet.rows[ri][ci]) {
+      editingFormula.value = sheet.rows[ri][ci].f || sheet.rows[ri][ci].v
+    } else {
+      editingFormula.value = ''
+    }
+  }
+
+  const updateDragSelect = (ri: number, ci: number) => {
+    if (!isDragging.value) return
+    if (selectedCell.value?.ri !== ri || selectedCell.value?.ci !== ci) {
+      dragDidMove.value = true
+    }
+    selectedCell.value = { ri, ci }
+  }
+
+  const endDragSelect = () => {
+    isDragging.value = false
+  }
+
   // ========== 追加 ==========
 
   const addRow = () => {
@@ -904,6 +939,8 @@ export function useExcel() {
     selectionAnchor.value = null
     editCell.value = null
     contextMenu.value = { show: false, x: 0, y: 0, ri: -1, ci: -1 }
+    isDragging.value = false
+    dragDidMove.value = false
     colWidths.value = {}
     editingFormula.value = ''
     undoStack.value = []
@@ -912,7 +949,7 @@ export function useExcel() {
   }
 
   return {
-    excelData, excelFilePath, excelFillColor, selectedCell, selectionAnchor,
+    excelData, excelFilePath, excelFillColor, excelTextColor, selectedCell, selectionAnchor,
     editCell, copiedData, contextMenu,
     colWidths, editingFormula, undoStack, redoStack, excelLoading,
     selectedRange, isInRange, isActiveCell,
@@ -921,6 +958,7 @@ export function useExcel() {
     insertRowAbove, insertRowBelow, insertColLeft, insertColRight,
     deleteRow, deleteCol, moveSelection, selectCell,
     handleCellKeydown, showContextMenu, closeContextMenu,
+    isDragging, startDragSelect, updateDragSelect, endDragSelect,
     saveToFile, initEmpty, reset,
     undo, redo, commitFormula, cancelEdit, startColResize, switchSheet,
     startEdit, endEdit, isEditing,

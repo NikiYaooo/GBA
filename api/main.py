@@ -52,7 +52,7 @@ kb = KnowledgeBase(data_dir=DATA_DIR)
 ai_service = AIService(kb=kb, data_dir=DATA_DIR)
 
 # 创建 FastAPI 应用
-app = FastAPI(title="游戏策划AI文档助手 API")
+app = FastAPI(title="Game builder aide API")
 
 # CORS
 app.add_middleware(
@@ -88,7 +88,7 @@ app.include_router(project_profile_router.router)
 
 @app.get("/")
 async def root():
-    return {"message": "游戏策划AI文档助手 API 已启动"}
+    return {"message": "Game builder aide API 已启动"}
 
 
 if __name__ == "__main__":

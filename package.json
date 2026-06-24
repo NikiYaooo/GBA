@@ -1,7 +1,7 @@
 {
-  "name": "game_builder",
+  "name": "game-builder-aide",
   "private": true,
-  "version": "2.6.13",
+  "version": "3.1.0",
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -68,10 +68,10 @@
     "vue-tsc": "^1.8.27"
   },
   "build": {
-    "appId": "com.gamebuilder.aihelper",
-    "productName": "游戏策划AI文档助手",
+    "appId": "com.gamebuilder.aide",
+    "productName": "Game builder aide",
     "directories": {
-      "output": "release28"
+      "output": "GBA"
     },
     "files": [
       "dist",
@@ -91,7 +91,7 @@
       }
     ],
     "win": {
-      "target": "portable"
+      "target": "nsis"
     }
   }
 }

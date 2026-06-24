@@ -56,7 +56,33 @@ export function useBackend() {
     await waitForReady()
   }
 
+  const showDiagnostics = async () => {
+    const api = (window as any).electronAPI
+    if (!api?.getBackendDiagnostics) {
+      alert('诊断信息不可用')
+      return
+    }
+    try {
+      const diag = await api.getBackendDiagnostics()
+      const lines = [
+        `=== 后端诊断信息 ===`,
+        `Python 进程运行中: ${diag.pythonRunning}`,
+        `Python 路径: ${diag.pythonPath || '未知'}`,
+        `数据目录: ${diag.dataDir || '未知'}`,
+        ``,
+        `--- main.log (最后 20 行) ---`,
+        diag.mainLog || '(空)',
+        ``,
+        `--- python.log (最后 20 行) ---`,
+        diag.pythonLog || '(空)',
+      ].join('\n')
+      alert(lines)
+    } catch (e: any) {
+      alert('读取诊断信息失败: ' + (e.message || String(e)))
+    }
+  }
+
   setApiBaseUrl(apiBaseUrl.value)
 
-  return { apiBaseUrl, connected, statusText, waitForReady, scanAllPorts, restart }
+  return { apiBaseUrl, connected, statusText, waitForReady, scanAllPorts, restart, showDiagnostics }
 }

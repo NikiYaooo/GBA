@@ -34,8 +34,9 @@ __pycache__/
 # Electron
 dist-electron
 
-# Release
+# Release / build output
 release*/
+GBA/
 
 # Runtime data
 data/
@@ -58,4 +59,5 @@ template/
 .superpowers/brainstorm/
 .claude/skills/find-skills/
 .claude/settings.local.json
+.claude/worktrees/
 skills-lock.json

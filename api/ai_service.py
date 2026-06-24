@@ -264,13 +264,21 @@ class AIService:
             })
         return sections
 
-    async def quality_check(self, model: str, doc_content: str, system_prompt: str = None) -> str:
+    async def quality_check(self, model: str, doc_content: str, system_prompt: str = None,
+                           reference_content: str = None, config_description: str = None) -> str:
         if not system_prompt:
             system_prompt = "你是一名资深游戏策划专家，请对用户提供的策划文档进行严格质检。检查逻辑矛盾、信息缺失、边界遗漏、文案模糊、落地性和规范问题。请输出：风险等级、问题原文、分析、修改建议。"
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"请质检以下文档内容：\n\n{doc_content}"}
-        ]
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        user_parts = []
+        if reference_content:
+            user_parts.append(f"【参考系统策划案】\n{reference_content}\n")
+        if config_description:
+            user_parts.append(f"【配置表说明】\n{config_description}\n")
+        user_parts.append(f"【待质检文档内容】\n\n{doc_content}")
+
+        messages.append({"role": "user", "content": "\n---\n".join(user_parts)})
         return await self._call_api(model, messages)
 
     async def imitate(self, model: str, requirements: str, doc_content: str, use_rag: bool = True, output_format: str = "markdown", template_content: str = "", images: list = None, project_id: str = "", kb_only: bool = False, cite_sources: bool = False) -> str:

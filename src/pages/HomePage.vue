@@ -88,6 +88,7 @@ import KBChunkSizeDialog from '@/components/dialogs/KBChunkSizeDialog.vue'
 import KBBatchImportDialog from '@/components/dialogs/KBBatchImportDialog.vue'
 import ToolsDialog from '@/components/dialogs/ToolsDialog.vue'
 import ImageToolDialog from '@/components/dialogs/ImageToolDialog.vue'
+import QualityCheckDialog from '@/components/dialogs/QualityCheckDialog.vue'
 import AIIterationPanel from '@/components/panels/AIIterationPanel.vue'
 
 // --- Composables ---
@@ -188,6 +189,10 @@ watch(() => tiptapEditor.value?.state.selection, () => {
 const ctxMenu = ref({ visible: false, x: 0, y: 0, doc: null as DocRecord | null })
 const closeCtxMenu = () => { ctxMenu.value.visible = false }
 const excelCellBlur = (e: KeyboardEvent) => (e.target as HTMLElement)?.blur()
+
+// --- Quality check dialog ---
+const showQualityCheckDialog = ref(false)
+const pendingQCDoc = ref<DocRecord | null>(null)
 
 const showCtxMenu = (e: MouseEvent, doc: DocRecord) => {
   ctxMenu.value = { visible: true, x: e.clientX, y: e.clientY, doc }
@@ -519,13 +524,57 @@ const handleDocCommand = async (command: string, doc: DocRecord) => {
       }
     } catch { /* */ }
   } else if (command === 'qualityCheck') {
-    ai.aiResult.value = ''; ai.isProcessing.value = true
-    const text = tiptapEditor.value?.getText() || docs.currentDoc.value.content || ''
-    const pro = prompts.professionsFull.value.find(p => p.id === prompts.selectedImitationProfession.value)
-    const qcPrompt = pro?.qualityCheckPrompt || ''
-    const result = await ai.runQualityCheck(text, qcPrompt)
-    if (result) ai.aiResult.value = `【质检职业：${pro?.name || '默认'}】\n\n${result}`
-    else ElMessage.error('质检失败')
+    pendingQCDoc.value = doc
+    showQualityCheckDialog.value = true
+  }
+}
+
+const handleQualityCheckSubmit = async (referenceContent: string, configDescription: string) => {
+  const doc = pendingQCDoc.value
+  if (!doc) return
+  pendingQCDoc.value = null
+
+  let targetContent = docs.currentDoc.value?.id === doc.id
+    ? (tiptapEditor.value?.getText() || docs.currentDoc.value.content || '')
+    : (doc.content || '')
+
+  // 如果内容为空，主动从后端拉取完整文档内容
+  if (!targetContent) {
+    try {
+      const r = await axios.get(apiUrl(`/api/documents/${doc.id}`))
+      targetContent = r.data?.data?.content || ''
+    } catch { /* */ }
+  }
+
+  if (!targetContent) {
+    ElMessage.warning('该文档内容为空，请先在编辑器中写入内容后再进行质检')
+    ai.isProcessing.value = false
+    return
+  }
+
+  const pro = prompts.professionsFull.value.find(p => p.id === prompts.selectedImitationProfession.value)
+  const qcPrompt = pro?.qualityCheckPrompt || ''
+
+  ai.aiResult.value = ''
+  ai.isProcessing.value = true
+
+  try {
+    // 构建显示标题
+    let title = `【质检文档：${doc.name}】`
+    if (pro) title += `\n【质检职业：${pro.name}】`
+    if (referenceContent) title += `\n【参考文档：已上传】`
+    if (configDescription) title += `\n【配置表说明：${configDescription.slice(0, 50)}${configDescription.length > 50 ? '...' : ''}】`
+
+    const result = await ai.runQualityCheck(targetContent, qcPrompt, referenceContent, configDescription)
+    if (result) {
+      ai.aiResult.value = `${title}\n\n${result}`
+      aiResultTab.value = 'result'
+    } else {
+      ElMessage.error('质检失败')
+    }
+  } catch (e: any) {
+    ElMessage.error('质检请求失败: ' + (getErrMsg(e) || e.message || '未知错误'))
+  } finally {
     ai.isProcessing.value = false
   }
 }
@@ -995,6 +1044,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
           <div :class="['w-2 h-2 rounded-full shrink-0', backend.connected.value ? 'bg-green-500' : 'bg-yellow-500']"></div>
           <span class="truncate">{{ backend.statusText.value }}</span>
           <el-button link size="small" class="ml-auto shrink-0" title="重启后端" @click="backend.restart(); ElMessage.success('已重启')"><RefreshCw class="w-3 h-3" /></el-button>
+          <el-button v-if="!backend.connected.value" link size="small" class="shrink-0" title="诊断" @click="backend.showDiagnostics()"><span class="text-xs">诊断</span></el-button>
         </div>
       </div>
     </div>
@@ -1102,6 +1152,10 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
               <input type="color" :value="excel.excelFillColor.value" class="absolute inset-0 opacity-0 cursor-pointer w-full" @change="(e: any) => { excel.excelFillColor.value = e.target.value; excel.applyColorToSelection() }" />
             </label>
           </div>
+          <div class="relative" title="文字颜色">
+            <label class="cursor-pointer px-2 py-1 rounded hover:bg-app-hover flex items-center"><LetterText class="w-4 h-4" /><span class="w-3 h-0.5 ml-0.5" :style="{ background: excel.excelTextColor.value || '#000000' }"></span></label>
+            <input type="color" :value="excel.excelTextColor.value || '#000000'" class="absolute inset-0 opacity-0 cursor-pointer w-full" @change="(e: any) => { excel.excelTextColor.value = e.target.value; excel.setCellTextColor(e.target.value) }" />
+          </div>
         </div>
       </div>
 
@@ -1147,11 +1201,6 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
             <el-button size="small" plain @click="excel.copySelection()" title="复制单元格" :disabled="!(excel.selectedCell.value || excel.editCell.value)"><Copy class="w-3 h-3" /></el-button>
             <el-button size="small" plain @click="excel.pasteToSelection()" title="粘贴单元格" :disabled="!(excel.selectedCell.value || excel.editCell.value) || !excel.copiedData.value"><Clipboard class="w-3 h-3" /></el-button>
             <div class="flex-1" />
-            <label class="text-xs text-app-muted flex items-center gap-1 cursor-pointer" title="填充颜色">
-              <span class="w-3 h-3 rounded border inline-block" :style="{background: excel.excelFillColor.value}"></span>
-              <input type="color" :value="excel.excelFillColor.value" class="w-5 h-5 border-0 p-0 cursor-pointer" @change="(e:any) => { excel.excelFillColor.value = e.target.value; excel.applyColorToSelection() }" />
-            </label>
-            <el-button size="small" plain @click="handleDocCommand('saveAs', docs.currentDoc.value)"><Save class="w-3.5 h-3.5" /><span class="ml-1">另存为</span></el-button>
           </div>
           <!-- Formula bar -->
           <div v-if="excel.selectedCell.value || excel.editCell.value" class="mb-1 flex items-center gap-1 shrink-0 text-xs">
@@ -1166,7 +1215,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
             />
           </div>
           <!-- Table -->
-          <div class="overflow-auto border border-app rounded-lg flex-1" @click.self="excel.closeContextMenu()" @keydown="excel.handleCellKeydown($event)">
+          <div class="overflow-auto border border-app rounded-lg flex-1" @click.self="excel.closeContextMenu()" @keydown="excel.handleCellKeydown($event)" @mouseup="excel.endDragSelect()" @mouseleave="excel.endDragSelect()">
             <table class="w-full text-xs border-collapse" style="table-layout:fixed">
               <colgroup>
                 <col style="width:30px" />
@@ -1184,12 +1233,14 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
               </thead>
               <tbody>
                 <tr v-for="(row, ri) in (excel.excelData.value.sheets[excel.excelData.value.activeSheet]?.rows || [])" :key="ri">
-                  <td class="border border-app bg-app p-1 text-center text-app-muted text-xs sticky left-0 z-10 select-none" @click="excel.selectCell(ri, 0)">{{ ri + 1 }}</td>
+                  <td class="border border-app bg-app p-1 text-center text-app-muted text-xs sticky left-0 z-10 select-none" @mousedown.prevent="excel.startDragSelect(ri, 0, $event)" @mouseenter="excel.updateDragSelect(ri, 0)" @click="excel.selectCell(ri, 0)">{{ ri + 1 }}</td>
                   <td v-for="(cell, ci) in row" :key="ci"
                     :class="['border border-app p-0 relative group cursor-default transition-shadow',
                       excel.selectedCell.value?.ri === ri && excel.selectedCell.value?.ci === ci ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/30' : '',
                       excel.isEditing(ri, ci) ? 'ring-2 ring-green-400 ring-inset' : '']"
                     :style="cell.color ? {background: cell.color} : {}"
+                    @mousedown.prevent="excel.startDragSelect(ri, ci, $event)"
+                    @mouseenter="excel.updateDragSelect(ri, ci)"
                     @click="excel.selectCell(ri, ci)"
                     @dblclick="excel.startEdit(ri, ci)"
                     @contextmenu.prevent="excel.showContextMenu($event, ri, ci)"
@@ -1199,7 +1250,7 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
                       :data-cell-edit="`${ri}-${ci}`"
                       class="outline-none p-1 min-h-[26px] text-xs"
                       @focus="(e:any) => { e.target.textContent = cell.f || cell.v }"
-                      @blur="(e:any) => { if (excel.isEditing(ri, ci)) excel.endEdit(true) }"
+                      @blur="(e:any) => { if (excel.isEditing(ri, ci)) { excel.editingFormula.value = e.target.textContent; excel.endEdit(true) } }"
                       @keydown.tab.prevent.stop="excelCellBlur($event); excel.moveSelection(0, $event.shiftKey ? -1 : 1)"
                       @keydown.enter.prevent.stop="excelCellBlur($event); excel.moveSelection($event.shiftKey ? -1 : 1, 0)"
                       @keydown.ctrl.a.prevent.stop="excel.handleCellKeydown($event)"
@@ -1545,6 +1596,8 @@ const openSettings = () => settings.openSettings(() => prompts.loadProfessionsFu
       @save-reminder="tools.saveReminder"
       @delete-reminder="tools.deleteReminder"
     />
+
+    <QualityCheckDialog v-model:visible="showQualityCheckDialog" @submit="handleQualityCheckSubmit" />
 
   </div>
 </template>

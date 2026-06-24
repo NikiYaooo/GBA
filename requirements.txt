@@ -3,11 +3,12 @@ uvicorn
 python-multipart
 python-docx
 markdown
-python-docx
 openai
 pydantic
 python-dotenv
 requests
+httpx
+openpyxl
 sentence-transformers
 rank_bm25
 jieba

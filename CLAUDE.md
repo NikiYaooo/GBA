@@ -83,10 +83,11 @@ Vue 3 SPA (src/pages/HomePage.vue)           config.py, excel.py, prompts.py
 | `api/` | Python FastAPI backend — main.py (entry), routers/ (12 routers), service modules, switch_checker |
 | `api/routers/` | API 路由模块 — image_gen.py, knowledge_base.py, ai.py, documents.py, 等 |
 | `src/` | Vue 3 frontend — SPA in pages/, dialogs in components/dialogs/ |
-| `src/composables/` | Vue composables — useKnowledgeBase.ts, useAI.ts, useDocuments.ts, 等 |
-| `electron/` | Electron main.ts (Python lifecycle, IPC handlers) + preload.ts |
+| `src/composables/` | Vue composables — useKnowledgeBase, useAI, useDocuments, useExcel, useBackend, useImageLibrary, useTools, useTheme 等 |
+| `electron/` | Electron main.ts (Python lifecycle, IPC handlers, diagnostics) + preload.ts |
+| `GBA/` | 构建输出目录（便携版 exe + setup_env.bat + requirements.txt + 功能文档.md） |
 | `src/types/index.ts` | TypeScript 类型定义（共享给所有组件和composables） |
-| `src/utils/api.ts` | API 工具 — apiUrl(), getErrMsg(), scanPorts() |
+| `src/utils/api.ts` | API 工具 — apiUrl(), getErrMsg(), scanPorts()（含 Vitest 测试） |
 | `tests/` | Python pytest 测试 (44 tests: KB项目 + AI服务 + 图片编辑) |
 | `docs/superpowers/` | 设计规格文档 (specs/) 和实现计划 (plans/) |
 
@@ -95,12 +96,15 @@ Vue 3 SPA (src/pages/HomePage.vue)           config.py, excel.py, prompts.py
 | Command | Description |
 |---|---|
 | `npm run check` | TypeScript 类型检查 (vue-tsc -b) |
-| `npm run build` | 完整构建: vue-tsc → vite → electron-builder → release28/ |
-| `npx vite build` | 仅 Vite 构建（跳过类型检查） |
+| `npm run build` | 完整构建: vue-tsc → vite → electron-builder → `GBA/` |
+| `npx vite build` | 仅 Vite 构建（跳过类型检查，只构建前端） |
+| `npx electron-builder` | 仅打包（跳过类型检查和 vite，需先手动 `npx vite build`） |
 | `npm run dev` | 开发模式 — Vite HMR + Electron |
+| `npm run check` | TypeScript 类型检查 (vue-tsc -b) |
+| `npm test` | 运行前端 Vitest 测试（3 个文件） |
+| `npm run test:watch` | 前端 Vitest watch 模式 |
 | `.venv\Scripts\python.exe -m pytest tests/ -v` | 运行 Python 测试（44个） |
-| `.venv\Scripts\python.exe -m pytest tests/test_kb_project.py::test_name -v` | 单个测试 |
-| `.venv\Scripts\python.exe api/main.py` | 单独启动 Python 后端（端口8000） |
+| `.venv\Scripts\python.exe api/main.py` | 单独启动 Python 后端（监听 127.0.0.1:8000） |
 
 ## Architecture Details
 
@@ -116,12 +120,20 @@ Vue 3 SPA (src/pages/HomePage.vue)           config.py, excel.py, prompts.py
 - `useKnowledgeBase.ts` — 管理 KB 对话框状态：项目/文件夹/文档CRUD、搜索、备份、词库、切片配置
 - `useAI.ts` — 管理智能仿写/质检/逻辑补完 + PRD 多轮迭代 (`iterationHistory`, `runIteration`)
 - `useDocuments.ts` — 文档CRUD、上传（含扩展名自动分类、上传后立即插入列表）、筛选搜索
+- `useBackend.ts` — 后端连接状态检测（waitForReady 20次重试、端口扫描、重启、诊断信息）
 - `useTools.ts` — 管理工具栏组件状态（图片工具、模板、SVN、提醒等）
 - `useTheme.ts` — 界面亮暗主题切换
 
 ### Electron IPC 通道
-- `window.electronAPI` 通过 preload.ts 暴露
-- 关键通道: `toggle-auto-start`, `show-item-in-folder`, `save-file-as`, `select-local-image`, `run-svn-update`, `open-path`, `select-folder`, `restart-backend`, `test-ai-model`
+- `window.electronAPI` 通过 preload.ts 暴露（contextIsolation: false, nodeIntegration: true）
+- 关键通道: `toggle-auto-start`, `show-item-in-folder`, `save-file-as`, `select-local-image`, `run-svn-update`, `open-path`, `select-folder`, `restart-backend`, `test-ai-model`, `get-backend-base-url`, `get-backend-diagnostics`
+
+### 后端启动诊断
+- `startPythonBackend()` 返回 `Promise<boolean>`，启动失败时应用退出
+- 启动后 3 秒健康检查：如果进程退出，读取 `data/logs/python.log` 并弹窗显示错误
+- 前端 `useBackend.showDiagnostics()` 通过 IPC `get-backend-diagnostics` 读取日志
+- 主日志: `data/logs/main.log`（Electron 侧），Python 日志: `data/logs/python.log`
+- `dataDir` 优先使用 `PORTABLE_EXECUTABLE_DIR/data/`，回退到 `app.getPath('userData')`
 
 ### 图片生成 (image_gen.py)
 - 支持三种模式: 文生图 (generate)、图片修改 (edit with mask) + 原生编辑 (_native_edit_ark)
@@ -140,21 +152,72 @@ Vue 3 SPA (src/pages/HomePage.vue)           config.py, excel.py, prompts.py
 - AI 生成时作为约束注入提示词，防止自创设定
 
 ### 数据存储
-- 所有运行时数据存储在 `%APPDATA%\GameBuilderAIHelper\`（或 `GB_DATA_DIR` 覆盖）
+- 便携版运行时数据存储在 `exe同目录/data/`（优先）
+- 回退到 `%APPDATA%\GameBuilderAIHelper\`（可通过 `GB_DATA_DIR` 环境变量覆盖）
 - 存储为 JSON 文件 + numpy 向量 (.npy)
 - 构建时 `api/` 目录打包到 `resources/api/` 中
+- `requirements.txt` 存在于项目根目录和 `GBA/` 输出目录，两处都需要同步更新
 
 ## Build Details
 
 - `electron-builder` 配置在 `package.json` → `build` 字段
-- 输出: `release28/游戏策划AI文档助手.exe` (Win portable，~300MB)
-- 打包内容: `dist/`, `dist-electron/`, `api/` (resources/api/)
-- Electron 27.3.11, 需安装 `python-3.10+` 和 `pip install -r requirements.txt`
+- 输出: `GBA/Game builder aide Setup 3.1.0.exe` (Win NSIS 安装包，~84MB)
+- 打包内容: `dist/` (前端), `dist-electron/` (主进程), `api/` → `resources/api/` (Python 后端)
+- 源代码不打包（只有 dist/ 和 dist-electron/ 的编译产物）
+- 分享给他人使用时需同时提供 `setup_env.bat` 和 `requirements.txt`（位于 `GBA/`）
+- Electron 27.3.11, 需安装 `python-3.10+` 和 `.venv\Scripts\pip install -r requirements.txt`
+- 构建命令: `npm run build`（全量）或 `npx vite build && npx electron-builder`（分步）
+
+### 安装版启动流程
+1. 用户运行 `setup_env.bat` → 创建 `.venv` → pip 安装依赖
+2. 运行 `GBA/Game builder aide Setup 3.1.0.exe` 安装（一次性安装到 Program Files）
+3. 后续从开始菜单或桌面快捷方式启动
+4. Electron 主进程查找 `.venv/Scripts/python.exe`（优先 exe 同目录）
+4. 依赖预检（fastapi, uvicorn, openai, httpx, openpyxl 等）
+5. 如果依赖缺失，弹出"一键安装"对话框
+6. 启动 Python 后端（api/main.py），等待 3s 健康检查
+7. 如果后端崩溃，弹出诊断对话框（含 stderr 日志）
+8. 前端口 20 次重试连接（每次 2s），失败显示"后端服务连接失败"+ 诊断按钮
+
+## Key Architecture Patterns
+
+### Python 后端模块间共享服务实例
+- `api/main.py` 创建 `KnowledgeBase` 和 `AIService` 实例后，通过猴子补丁挂载到 router 模块:
+  ```python
+  kb_router.router.kb = kb
+  ai_router.router.ai_service = ai_service
+  image_gen_router.router.ai_service = ai_service
+  ```
+- router 模块在顶层通过 `router.kb` / `router.ai_service` 访问这些实例
+
+### 关键文件同步
+- `requirements.txt` 需要同时在两处更新：
+  - `E:\game_builder\requirements.txt`（项目根目录，供开发用）
+  - `E:\game_builder\GBA\requirements.txt`（构建输出目录，供最终用户用）
+- `setup_env.bat` 只存在于 `GBA/` 输出目录
+
+### 后端自动安装机制
+- `electron/main.ts` 的 `startPythonBackend()` 中做了依赖预检
+- 如果检测到 Python 但缺少依赖，弹窗让用户选择"一键安装"或"退出"
+- 一键安装通过 `pip install -r requirements.txt` 自动完成
+- 预检覆盖的包: `fastapi, uvicorn, openai, docx, PIL, requests, pydantic, dotenv, markdown, httpx, openpyxl`
 
 ## Testing Notes
 
-- **只有 Python 后端测试**，无前端测试
-- 测试文件: `tests/test_kb_project.py` (KBProject), `tests/test_ai_service.py` (AI服务), `tests/test_image_edit.py` (图片编辑遮罩)
-- 共 44 个测试
+### Python 后端测试（44 个）
+- 测试框架: pytest
+- 测试文件:
+  - `tests/test_kb_project.py` — KBProject 知识库引擎（向量检索、BM25 搜索、CRUD）
+  - `tests/test_ai_service.py` — AI 服务（模型调用）
+  - `tests/test_image_edit.py` — 图片编辑遮罩
 - KBProject 测试使用 `tempfile.mkdtemp` 创建临时项目目录，测试后 `shutil.rmtree` 清理
 - 测试需要从项目根目录运行（Python path 包含 api/ 目录）
+- 运行单个测试: `.venv\Scripts\python.exe -m pytest tests/test_kb_project.py::test_name -v`
+
+### 前端测试（3 个文件）
+- 测试框架: Vitest（v3.x），位于项目根目录下
+- 测试文件:
+  - `src/model-defs.test.ts` — 文本/图片模型定义完整性校验
+  - `src/utils/api.test.ts` — API 工具函数（apiUrl 拼接、setApiBaseUrl/getApiBaseUrl、getErrMsg 异常信息提取）
+  - `src/utils/doc-sections.test.ts` — 文档章节解析（parseHtmlSections）
+- 运行: `npm test`（单次）或 `npm run test:watch`（watch 模式）
